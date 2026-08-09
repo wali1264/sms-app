@@ -7,25 +7,24 @@ import com.example.sms.AndroidSmsSender
 
 class TeacherAttendanceApp : Application() {
 
-    lateinit var database: AppDatabase
-        private set
+    val database: AppDatabase by lazy {
+        AppDatabase.getDatabase(this)
+    }
 
-    lateinit var repository: AppRepository
-        private set
-
-    override fun onCreate() {
-        super.onCreate()
-        instance = this
-        database = AppDatabase.getDatabase(this)
-        val smsSender = AndroidSmsSender(this)
-        repository = AppRepository(
+    val repository: AppRepository by lazy {
+        AppRepository(
             studentDao = database.studentDao(),
             attendanceDao = database.attendanceDao(),
             messageDao = database.messageDao(),
             settingsDao = database.settingsDao(),
-            smsSender = smsSender,
+            smsSender = AndroidSmsSender(this),
             context = this
         )
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        instance = this
     }
 
     companion object {

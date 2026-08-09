@@ -11,23 +11,27 @@ class Converters {
     fun fromEventType(value: EventType): String = value.name
 
     @TypeConverter
-    fun toEventType(value: String): EventType = EventType.valueOf(value)
+    fun toEventType(value: String?): EventType =
+        runCatching { EventType.valueOf(value ?: "") }.getOrDefault(EventType.ABSENCE)
 
     @TypeConverter
     fun fromSendChannel(value: SendChannel): String = value.name
 
     @TypeConverter
-    fun toSendChannel(value: String): SendChannel = SendChannel.valueOf(value)
+    fun toSendChannel(value: String?): SendChannel =
+        runCatching { SendChannel.valueOf(value ?: "") }.getOrDefault(SendChannel.SMS)
 
     @TypeConverter
     fun fromMessageStatus(value: MessageStatus): String = value.name
 
     @TypeConverter
-    fun toMessageStatus(value: String): MessageStatus = MessageStatus.valueOf(value)
+    fun toMessageStatus(value: String?): MessageStatus =
+        runCatching { MessageStatus.valueOf(value ?: "") }.getOrDefault(MessageStatus.PENDING)
 
     @TypeConverter
     fun fromNotificationTarget(value: NotificationTarget): String = value.name
 
     @TypeConverter
-    fun toNotificationTarget(value: String): NotificationTarget = NotificationTarget.valueOf(value)
+    fun toNotificationTarget(value: String?): NotificationTarget =
+        runCatching { NotificationTarget.valueOf(value ?: "") }.getOrDefault(NotificationTarget.ABSENT_ONLY)
 }

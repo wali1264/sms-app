@@ -12,8 +12,8 @@ class SendMessageWorker(
 
     override suspend fun doWork(): Result {
         return try {
-            val repository = (applicationContext as TeacherAttendanceApp).repository
-            repository.processPendingSmsMessages()
+            val app = applicationContext as? TeacherAttendanceApp ?: return Result.failure()
+            app.repository.processPendingSmsMessages()
             Result.success()
         } catch (e: Exception) {
             Result.retry()

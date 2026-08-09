@@ -241,10 +241,14 @@ class AppRepository(
     }
 
     fun triggerWorkManager() {
-        val workRequest = OneTimeWorkRequestBuilder<SendMessageWorker>()
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
-            .build()
-        WorkManager.getInstance(context).enqueue(workRequest)
+        try {
+            val workRequest = OneTimeWorkRequestBuilder<SendMessageWorker>()
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
+                .build()
+            WorkManager.getInstance(context).enqueue(workRequest)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     suspend fun processPendingSmsMessages() {
