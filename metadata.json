@@ -1,0 +1,6 @@
+{
+  "name": "حضور و اطلاع‌رسانی معلم",
+  "description": "سیستم ثبت حضور و غیاب شاگردان مکتب و اطلاع‌رسانی به والدین از طریق SMS و WhatsApp",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
