@@ -1,0 +1,11 @@
+# Handle line endings automatically for text files and preserve binary files
+* text=auto
+
+# Declare binary files explicitly to prevent Git line-ending (CRLF/LF) corruption
+*.jar binary
+*.png binary
+*.jpg binary
+*.webp binary
+*.keystore binary
+*.so binary
+*.aar binary
