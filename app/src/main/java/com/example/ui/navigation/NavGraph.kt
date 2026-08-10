@@ -15,11 +15,12 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
@@ -28,8 +29,10 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.TeacherAttendanceApp
+import com.example.auth.AuthState
 import com.example.ui.attendance.AttendanceScreen
 import com.example.ui.attendance.AttendanceViewModel
+import com.example.ui.auth.AuthScreen
 import com.example.ui.messages.MessagesScreen
 import com.example.ui.messages.MessagesViewModel
 import com.example.ui.settings.SettingsScreen
@@ -48,73 +51,92 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector)
     object Settings : Screen("settings", "تنظیمات", Icons.Default.Settings)
 }
 
-val bottomNavItems = listOf(
-    Screen.Attendance,
-    Screen.Students,
-    Screen.Messages,
-    Screen.Settings
-)
-
 @Composable
 fun MainAppNavigation() {
     val navController = rememberNavController()
     val context = LocalContext.current.applicationContext
-    val repository = remember(context) {
-        (context as TeacherAttendanceApp).repository
-    }
+    val app = context as TeacherAttendanceApp
+    val repository = remember(context) { app.repository }
+    val authManager = remember(context) { app.authManager }
 
-    Scaffold(
-        bottomBar = {
-            BottomNavigationBar(navController = navController)
+    val authState by authManager.authState.collectAsStateWithLifecycle()
+
+    if (authState is AuthState.LoggedIn) {
+        val user = authState as AuthState.LoggedIn
+        val isManager = user.role == "MANAGER"
+
+        val navItems = if (isManager) {
+            listOf(Screen.Attendance, Screen.Students, Screen.Messages, Screen.Settings)
+        } else {
+            listOf(Screen.Attendance, Screen.Students, Screen.Settings)
         }
-    ) { innerPadding ->
-        NavHost(
-            navController = navController,
-            startDestination = Screen.Attendance.route,
-            modifier = Modifier.padding(innerPadding)
-        ) {
-            composable(Screen.Attendance.route) {
-                val viewModel: AttendanceViewModel = viewModel(
-                    factory = AttendanceViewModel.Factory(repository)
-                )
-                AttendanceScreen(
-                    viewModel = viewModel,
-                    onNavigateToStudents = {
-                        navController.navigate(Screen.Students.route) {
-                            popUpTo(navController.graph.findStartDestination().id) { saveState = true }
-                            launchSingleTop = true
-                            restoreState = true
-                        }
+
+        Scaffold(
+            bottomBar = {
+                BottomNavigationBar(navController = navController, items = navItems)
+            }
+        ) { innerPadding ->
+            NavHost(
+                navController = navController,
+                startDestination = Screen.Attendance.route,
+                modifier = Modifier.padding(innerPadding)
+            ) {
+                composable(Screen.Attendance.route) {
+                    val viewModel: AttendanceViewModel = viewModel(
+                        factory = AttendanceViewModel.Factory(repository)
+                    )
+                    AttendanceScreen(
+                        viewModel = viewModel,
+                        onNavigateToStudents = {
+                            navController.navigate(Screen.Students.route) {
+                                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        },
+                        authManager = authManager
+                    )
+                }
+
+                composable(Screen.Students.route) {
+                    val viewModel: StudentsViewModel = viewModel(
+                        factory = StudentsViewModel.Factory(repository)
+                    )
+                    StudentsScreen(viewModel = viewModel)
+                }
+
+                if (isManager) {
+                    composable(Screen.Messages.route) {
+                        val viewModel: MessagesViewModel = viewModel(
+                            factory = MessagesViewModel.Factory(repository)
+                        )
+                        MessagesScreen(viewModel = viewModel)
                     }
-                )
-            }
+                }
 
-            composable(Screen.Students.route) {
-                val viewModel: StudentsViewModel = viewModel(
-                    factory = StudentsViewModel.Factory(repository)
-                )
-                StudentsScreen(viewModel = viewModel)
-            }
-
-            composable(Screen.Messages.route) {
-                val viewModel: MessagesViewModel = viewModel(
-                    factory = MessagesViewModel.Factory(repository)
-                )
-                MessagesScreen(viewModel = viewModel)
-            }
-
-            composable(Screen.Settings.route) {
-                val viewModel: SettingsViewModel = viewModel(
-                    factory = SettingsViewModel.Factory(repository)
-                )
-                SettingsScreen(viewModel = viewModel)
+                composable(Screen.Settings.route) {
+                    val viewModel: SettingsViewModel = viewModel(
+                        factory = SettingsViewModel.Factory(repository)
+                    )
+                    SettingsScreen(viewModel = viewModel, authManager = authManager)
+                }
             }
         }
+    } else {
+        AuthScreen(
+            authManager = authManager,
+            onAuthSuccess = {
+                // Handled reactively by state change
+            }
+        )
     }
 }
 
 @Composable
-fun BottomNavigationBar(navController: NavHostController) {
+fun BottomNavigationBar(
+    navController: NavHostController,
+    items: List<Screen>
+) {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
 
@@ -122,7 +144,7 @@ fun BottomNavigationBar(navController: NavHostController) {
         containerColor = Color.White,
         contentColor = TextPrimary
     ) {
-        bottomNavItems.forEach { screen ->
+        items.forEach { screen ->
             val selected = currentRoute == screen.route
             NavigationBarItem(
                 selected = selected,

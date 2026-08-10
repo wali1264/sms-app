@@ -16,6 +16,9 @@ interface MessageDao {
     @Query("SELECT * FROM message_records ORDER BY createdAt DESC")
     fun getAllMessages(): Flow<List<MessageRecord>>
 
+    @Query("SELECT * FROM message_records")
+    suspend fun getAllMessageRecordsList(): List<MessageRecord>
+
     @Query("SELECT * FROM message_records WHERE status = :status ORDER BY createdAt ASC")
     suspend fun getMessagesByStatus(status: MessageStatus): List<MessageRecord>
 
@@ -36,8 +39,27 @@ interface MessageDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertMessages(messageRecords: List<MessageRecord>): List<Long>
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun replaceMessages(messageRecords: List<MessageRecord>)
+
     @Update
     suspend fun updateMessage(messageRecord: MessageRecord)
+
+    @Query("SELECT * FROM message_records WHERE status = 'PENDING' OR (status = 'FAILED_RETRYABLE' AND attempts < 3) ORDER BY createdAt ASC")
+    suspend fun getPendingOrRetryableMessages(): List<MessageRecord>
+
+    @Query("UPDATE message_records SET status = 'FAILED_UNKNOWN', errorMessage = 'ارسال به دلیل قطع شدن ناگهانی برنامه معلق ماند.' WHERE status = 'SENDING'")
+    suspend fun markStuckSendingMessagesAsUnknown()
+
+    @Query("UPDATE message_records SET status = :status, sentAt = :sentAt, attempts = :attempts, errorMessage = :errorMessage, subId = :subId WHERE id = :id")
+    suspend fun updateMessageResult(
+        id: Long,
+        status: MessageStatus,
+        sentAt: Long?,
+        attempts: Int,
+        errorMessage: String?,
+        subId: Int?
+    )
 
     @Query("UPDATE message_records SET status = :status, sentAt = :sentAt, attempts = attempts + 1, errorMessage = :errorMessage WHERE id = :id")
     suspend fun updateMessageStatus(id: Long, status: MessageStatus, sentAt: Long?, errorMessage: String?)

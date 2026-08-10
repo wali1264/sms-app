@@ -53,6 +53,11 @@ fun MessagesScreen(viewModel: MessagesViewModel) {
     val messages by viewModel.messages.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
+    val pendingCount = messages.count { it.status == MessageStatus.PENDING }
+    val sendingCount = messages.count { it.status == MessageStatus.SENDING }
+    val sentCount = messages.count { it.status == MessageStatus.SENT || it.status == MessageStatus.DELIVERED }
+    val failedCount = messages.count { it.status in listOf(MessageStatus.FAILED_RETRYABLE, MessageStatus.FAILED_PERMANENT, MessageStatus.FAILED_UNKNOWN) }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -76,6 +81,44 @@ fun MessagesScreen(viewModel: MessagesViewModel) {
                 style = MaterialTheme.typography.bodyLarge,
                 color = TextSecondary
             )
+        }
+
+        // Queue Progress Card
+        if (messages.isNotEmpty()) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+                    .testTag("sms_queue_summary_card"),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = CardBackground)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("موفق", style = MaterialTheme.typography.labelSmall, color = SuccessGreen)
+                        Text("$sentCount", style = MaterialTheme.typography.titleMedium, color = SuccessGreen)
+                    }
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("در انتظار", style = MaterialTheme.typography.labelSmall, color = PrimaryBlue)
+                        Text("$pendingCount", style = MaterialTheme.typography.titleMedium, color = PrimaryBlue)
+                    }
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("در حال ارسال", style = MaterialTheme.typography.labelSmall, color = PrimaryBlue)
+                        Text("$sendingCount", style = MaterialTheme.typography.titleMedium, color = PrimaryBlue)
+                    }
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("ناموفق", style = MaterialTheme.typography.labelSmall, color = ErrorRed)
+                        Text("$failedCount", style = MaterialTheme.typography.titleMedium, color = ErrorRed)
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
         }
 
         if (messages.isEmpty()) {
@@ -129,9 +172,12 @@ fun MessageRowCard(
 
     val (statusText, statusBg, statusFg) = when (message.status) {
         MessageStatus.SENT -> Triple("ارسال شد", SuccessGreen.copy(alpha = 0.15f), SuccessGreen)
-        MessageStatus.FAILED -> Triple("ناموفق", ErrorRed.copy(alpha = 0.15f), ErrorRed)
+        MessageStatus.DELIVERED -> Triple("تحویل داده شد", SuccessGreen.copy(alpha = 0.15f), SuccessGreen)
+        MessageStatus.FAILED_RETRYABLE -> Triple("ناموفق (قابل تلاش)", ErrorRed.copy(alpha = 0.15f), ErrorRed)
+        MessageStatus.FAILED_PERMANENT -> Triple("ناموفق (دائمی)", ErrorRed.copy(alpha = 0.15f), ErrorRed)
+        MessageStatus.FAILED_UNKNOWN -> Triple("معلق (قطع برنامه)", Color(0xFFD84315).copy(alpha = 0.15f), Color(0xFFD84315))
         MessageStatus.PENDING -> Triple("در انتظار ارسال", PrimaryBlue.copy(alpha = 0.15f), PrimaryBlue)
-        MessageStatus.SENDING -> Triple("در حال ارسال", PrimaryBlue.copy(alpha = 0.15f), PrimaryBlue)
+        MessageStatus.SENDING -> Triple("در حال ارسال...", PrimaryBlue.copy(alpha = 0.15f), PrimaryBlue)
         MessageStatus.ACTION_REQUIRED -> Triple("نیازمند اقدام", Color(0xFFE65100).copy(alpha = 0.15f), Color(0xFFE65100))
     }
 
@@ -187,7 +233,7 @@ fun MessageRowCard(
             Spacer(modifier = Modifier.height(4.dp))
 
             Text(
-                text = "$channelLabel: ${message.phoneNumber}",
+                text = "$channelLabel: ${message.phoneNumber}${if (message.subId != null && message.subId != -1) " (SIM ${message.subId})" else ""}",
                 style = MaterialTheme.typography.bodyMedium,
                 color = TextSecondary
             )
@@ -222,7 +268,13 @@ fun MessageRowCard(
                     color = TextSecondary
                 )
 
-                if (message.status == MessageStatus.FAILED && message.channel == SendChannel.SMS) {
+                val isFailed = message.status in listOf(
+                    MessageStatus.FAILED_RETRYABLE,
+                    MessageStatus.FAILED_PERMANENT,
+                    MessageStatus.FAILED_UNKNOWN
+                )
+
+                if (isFailed && message.channel == SendChannel.SMS) {
                     Button(
                         onClick = onRetry,
                         colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),

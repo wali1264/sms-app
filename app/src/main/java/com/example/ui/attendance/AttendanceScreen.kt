@@ -4,46 +4,15 @@ import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.ExitToApp
-import androidx.compose.material.icons.filled.PersonAdd
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Send
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -54,24 +23,23 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.auth.AuthState
+import com.example.auth.SupabaseAuthManager
 import com.example.data.entity.EventType
-import com.example.ui.theme.CardBackground
-import com.example.ui.theme.DividerColor
-import com.example.ui.theme.ErrorRed
-import com.example.ui.theme.OnPrimaryContainerBlue
-import com.example.ui.theme.PrimaryBlue
-import com.example.ui.theme.PrimaryContainerBlue
-import com.example.ui.theme.SecondaryContainer
-import com.example.ui.theme.TextPrimary
-import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.*
 
 @Composable
 fun AttendanceScreen(
     viewModel: AttendanceViewModel,
-    onNavigateToStudents: () -> Unit
+    onNavigateToStudents: () -> Unit,
+    authManager: SupabaseAuthManager? = null
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
+
+    val authState = authManager?.authState?.collectAsStateWithLifecycle()?.value
+    val isTeacher = (authState as? AuthState.LoggedIn)?.role == "TEACHER"
+    val isOnline = authManager?.isNetworkAvailable() ?: true
 
     var isSearchActive by remember { mutableStateOf(false) }
 
@@ -87,6 +55,36 @@ fun AttendanceScreen(
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
+        // Network Status Banner for Manager & Teacher
+        Surface(
+            color = if (isOnline) Color(0xFFE8F5E9) else Color(0xFFFFEBEE),
+            modifier = Modifier.fillMaxWidth().testTag("network_status_banner")
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(10.dp)
+                        .clip(CircleShape)
+                        .background(if (isOnline) Color(0xFF2E7D32) else Color(0xFFC62828))
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = when {
+                        isTeacher && isOnline -> "معلم - آنلاین (ثبت حضور و غیاب مجاز است)"
+                        isTeacher && !isOnline -> "معلم - آفلاین (برای ثبت حضور و غیاب، اتصال اینترنت الزامی است)"
+                        !isTeacher && isOnline -> "مدیر - آنلاین (ذخیره‌سازی روی حافظه دستگاه + همگام‌سازی ابری)"
+                        else -> "مدیر - آفلاین (کامل بومی روی حافظه دستگاه بدون نیاز به اینترنت)"
+                    },
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (isOnline) Color(0xFF1B5E20) else Color(0xFFB71C1C)
+                )
+            }
+        }
+
         // App Bar Header
         Row(
             modifier = Modifier
@@ -186,13 +184,15 @@ fun AttendanceScreen(
                         }
                     }
 
-                    Button(
-                        onClick = { viewModel.openSendConfirmation(EventType.ARRIVAL) },
-                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier.testTag("fast_send_button")
-                    ) {
-                        Text("ثبت نهایی", style = MaterialTheme.typography.bodyLarge, color = Color.White)
+                    if (!isTeacher) {
+                        Button(
+                            onClick = { viewModel.openSendConfirmation(EventType.ARRIVAL) },
+                            colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier.testTag("fast_send_button")
+                        ) {
+                            Text("ثبت نهایی", style = MaterialTheme.typography.bodyLarge, color = Color.White)
+                        }
                     }
                 }
             }
@@ -238,14 +238,24 @@ fun AttendanceScreen(
                 items(uiState.items, key = { it.student.id }) { item ->
                     StudentAttendanceRow(
                         item = item,
-                        onToggle = { viewModel.toggleAttendance(item.student.id, item.isPresent) }
+                        onToggle = {
+                            if (isTeacher && !isOnline) {
+                                Toast.makeText(
+                                    context,
+                                    "برای ثبت حضور و غیاب توسط معلم، اتصال به اینترنت الزامی است.",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            } else {
+                                viewModel.toggleAttendance(item.student.id, item.isPresent)
+                            }
+                        }
                     )
                 }
             }
         }
 
-        // Bottom Actions Area
-        if (uiState.summary.totalStudents > 0) {
+        // Bottom Actions Area (Only visible for Manager)
+        if (!isTeacher && uiState.summary.totalStudents > 0) {
             Surface(
                 color = MaterialTheme.colorScheme.surface,
                 shadowElevation = 8.dp,
@@ -349,8 +359,7 @@ fun AttendanceScreen(
                 ) {
                     Text("لغو", color = TextSecondary)
                 }
-            },
-            shape = RoundedCornerShape(24.dp)
+            }
         )
     }
 }
@@ -363,6 +372,7 @@ fun StudentAttendanceRow(
     Card(
         modifier = Modifier
             .fillMaxWidth()
+            .clickable { onToggle() }
             .testTag("student_row_${item.student.id}"),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = CardBackground)
@@ -370,62 +380,36 @@ fun StudentAttendanceRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
+                .padding(16.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(modifier = Modifier.weight(1f)) {
+            Column {
                 Text(
                     text = item.student.name,
                     style = MaterialTheme.typography.titleMedium,
                     color = TextPrimary
                 )
+                Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    text = "ولد ${item.student.fatherName}",
+                    text = "نام پدر: ${item.student.fatherName.ifBlank { "-" }}",
                     style = MaterialTheme.typography.bodyMedium,
                     color = TextSecondary
                 )
             }
 
-            // Segmented Toggle Control (Single Touch Toggle)
-            Row(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(SecondaryContainer)
-                    .padding(3.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = if (item.isPresent) PrimaryContainerBlue else Color(0xFFFFEBEE),
+                modifier = Modifier.clickable { onToggle() }
             ) {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(if (item.isPresent) PrimaryBlue else Color.Transparent)
-                        .clickable { if (!item.isPresent) onToggle() }
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "حاضر",
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = if (item.isPresent) FontWeight.Bold else FontWeight.Normal,
-                        color = if (item.isPresent) Color.White else TextSecondary
-                    )
-                }
-
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(if (!item.isPresent) ErrorRed else Color.Transparent)
-                        .clickable { if (item.isPresent) onToggle() }
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "غایب",
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = if (!item.isPresent) FontWeight.Bold else FontWeight.Normal,
-                        color = if (!item.isPresent) Color.White else TextSecondary
-                    )
-                }
+                Text(
+                    text = if (item.isPresent) "حاضر" else "غایب",
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = if (item.isPresent) PrimaryBlue else ErrorRed,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
             }
         }
     }

@@ -13,11 +13,17 @@ interface StudentDao {
     @Query("SELECT * FROM students WHERE isActive = 1 ORDER BY name ASC")
     fun getAllActiveStudents(): Flow<List<Student>>
 
+    @Query("SELECT * FROM students")
+    suspend fun getAllStudentsList(): List<Student>
+
     @Query("SELECT * FROM students WHERE id = :id LIMIT 1")
     suspend fun getStudentById(id: Long): Student?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertStudent(student: Student): Long
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertStudents(students: List<Student>)
 
     @Update
     suspend fun updateStudent(student: Student)

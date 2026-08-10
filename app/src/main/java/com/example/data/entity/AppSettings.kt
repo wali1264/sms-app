@@ -19,5 +19,7 @@ data class AppSettings(
     val enableDeparture: Boolean = false,
     val absenceTemplate: String = "والد گرامی، فرزند شما {نام_شاگرد} امروز در مکتب حاضر نشده است. لطفاً پیگیری نمایید.",
     val arrivalTemplate: String = "والد گرامی، فرزند شما {نام_شاگرد} امروز ساعت {ساعت} وارد مکتب شد.",
-    val departureTemplate: String = "والد گرامی، فرزند شما {نام_شاگرد} امروز ساعت {ساعت} از مکتب خارج شد."
+    val departureTemplate: String = "والد گرامی، فرزند شما {نام_شاگرد} امروز ساعت {ساعت} از مکتب خارج شد.",
+    val selectedSubId: Int = -1,
+    val pacingDelayMs: Long = 2500L
 )

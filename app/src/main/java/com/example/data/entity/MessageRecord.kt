@@ -16,11 +16,14 @@ enum class SendChannel {
 }
 
 enum class MessageStatus {
-    PENDING,        // در انتظار ارسال
-    SENDING,        // در حال ارسال
-    SENT,           // ارسال شد
-    FAILED,         // ناموفق
-    ACTION_REQUIRED // نیازمند اقدام کاربر (مثلاً باز کردن واتساپ)
+    PENDING,            // در انتظار ارسال
+    SENDING,            // در حال ارسال
+    SENT,               // ارسال شد
+    DELIVERED,          // تحویل داده شد
+    FAILED_RETRYABLE,   // ناموفق - قابل تلاش مجدد
+    FAILED_PERMANENT,   // ناموفق - خطای دائمی
+    FAILED_UNKNOWN,     // ناموفق - معلق پس از قطع شدن برنامه
+    ACTION_REQUIRED     // نیازمند اقدام (واتساپ)
 }
 
 @Entity(
@@ -41,5 +44,6 @@ data class MessageRecord(
     val sentAt: Long? = null,
     val attempts: Int = 0,
     val status: MessageStatus = MessageStatus.PENDING,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val subId: Int? = null
 )

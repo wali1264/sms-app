@@ -26,7 +26,10 @@ class Converters {
 
     @TypeConverter
     fun toMessageStatus(value: String?): MessageStatus =
-        runCatching { MessageStatus.valueOf(value ?: "") }.getOrDefault(MessageStatus.PENDING)
+        when (value) {
+            "FAILED" -> MessageStatus.FAILED_PERMANENT
+            else -> runCatching { MessageStatus.valueOf(value ?: "") }.getOrDefault(MessageStatus.PENDING)
+        }
 
     @TypeConverter
     fun fromNotificationTarget(value: NotificationTarget): String = value.name
