@@ -28,6 +28,9 @@ import com.example.auth.SupabaseAuthManager
 import com.example.data.entity.EventType
 import com.example.ui.theme.*
 
+import androidx.compose.animation.core.*
+import androidx.compose.ui.draw.rotate
+
 @Composable
 fun AttendanceScreen(
     viewModel: AttendanceViewModel,
@@ -42,6 +45,17 @@ fun AttendanceScreen(
     val isOnline = authManager?.isNetworkAvailable() ?: true
 
     var isSearchActive by remember { mutableStateOf(false) }
+
+    val infiniteTransition = rememberInfiniteTransition(label = "refresh_rotation")
+    val rotationAngle by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "rotation"
+    )
 
     LaunchedEffect(uiState.toastMessage) {
         uiState.toastMessage?.let { msg ->
@@ -89,21 +103,42 @@ fun AttendanceScreen(
                 )
             }
 
-            IconButton(
-                onClick = {
-                    isSearchActive = !isSearchActive
-                    if (!isSearchActive) viewModel.onSearchQueryChanged("")
-                },
-                modifier = Modifier
-                    .size(44.dp)
-                    .clip(CircleShape)
-                    .background(SecondaryContainer)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Icon(
-                    imageVector = if (isSearchActive) Icons.Default.Close else Icons.Default.Search,
-                    contentDescription = "جستجو",
-                    tint = TextPrimary
-                )
+                IconButton(
+                    onClick = { viewModel.manualRefresh() },
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(SecondaryContainer)
+                        .testTag("refresh_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = "بروزرسانی",
+                        tint = TextPrimary,
+                        modifier = if (uiState.isSyncing) Modifier.rotate(rotationAngle) else Modifier
+                    )
+                }
+
+                IconButton(
+                    onClick = {
+                        isSearchActive = !isSearchActive
+                        if (!isSearchActive) viewModel.onSearchQueryChanged("")
+                    },
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(SecondaryContainer)
+                ) {
+                    Icon(
+                        imageVector = if (isSearchActive) Icons.Default.Close else Icons.Default.Search,
+                        contentDescription = "جستجو",
+                        tint = TextPrimary
+                    )
+                }
             }
         }
 

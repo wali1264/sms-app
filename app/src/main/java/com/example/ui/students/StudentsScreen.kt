@@ -59,6 +59,11 @@ import com.example.ui.theme.PrimaryBlue
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 
+import androidx.compose.animation.core.*
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.ui.draw.rotate
+import com.example.ui.theme.SecondaryContainer
+
 @Composable
 fun StudentsScreen(
     viewModel: StudentsViewModel,
@@ -66,6 +71,17 @@ fun StudentsScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
+
+    val infiniteTransition = rememberInfiniteTransition(label = "students_refresh_rotation")
+    val rotationAngle by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "rotation"
+    )
 
     LaunchedEffect(uiState.toastMessage) {
         uiState.toastMessage?.let { msg ->
@@ -120,11 +136,33 @@ fun StudentsScreen(
                             .testTag("students_network_status_dot")
                     )
                 }
-                Text(
-                    text = "${uiState.students.size} نفر",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = TextSecondary
-                )
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    IconButton(
+                        onClick = { viewModel.manualRefresh() },
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .background(SecondaryContainer)
+                            .testTag("students_refresh_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = "بروزرسانی",
+                            tint = TextPrimary,
+                            modifier = if (uiState.isSyncing) Modifier.rotate(rotationAngle) else Modifier
+                        )
+                    }
+
+                    Text(
+                        text = "${uiState.students.size} نفر",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = TextSecondary
+                    )
+                }
             }
 
             // Search Bar

@@ -33,6 +33,7 @@ data class AttendanceUiState(
     val isConfirmDialogOpen: Boolean = false,
     val confirmEventType: EventType = EventType.ARRIVAL,
     val pendingSendStats: PendingSendStats? = null,
+    val isSyncing: Boolean = false,
     val toastMessage: String? = null
 )
 
@@ -45,18 +46,43 @@ class AttendanceViewModel(private val repository: AppRepository) : ViewModel() {
     private val isConfirmDialogOpen = MutableStateFlow(false)
     private val confirmEventType = MutableStateFlow(EventType.ARRIVAL)
     private val pendingStats = MutableStateFlow<PendingSendStats?>(null)
+    private val isSyncing = MutableStateFlow(false)
     private val toastMessage = MutableStateFlow<String?>(null)
 
     init {
+        // Initial setup
         viewModelScope.launch {
-            try {
-                repository.syncWithCloudIfAvailable()
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
             val students = repository.allActiveStudents.firstOrNull() ?: emptyList()
             if (students.isNotEmpty()) {
                 repository.markAllDefaultPresent(dateIso, students)
+            }
+        }
+        // Real-time periodic cloud polling loop every 5 seconds
+        viewModelScope.launch {
+            while (true) {
+                try {
+                    isSyncing.value = true
+                    repository.syncWithCloudIfAvailable()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                } finally {
+                    isSyncing.value = false
+                }
+                kotlinx.coroutines.delay(5000)
+            }
+        }
+    }
+
+    fun manualRefresh() {
+        viewModelScope.launch {
+            try {
+                isSyncing.value = true
+                repository.syncWithCloudIfAvailable()
+                toastMessage.value = "اطلاعات بروزرسانی شد."
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                isSyncing.value = false
             }
         }
     }
@@ -69,6 +95,7 @@ class AttendanceViewModel(private val repository: AppRepository) : ViewModel() {
         isConfirmDialogOpen,
         confirmEventType,
         pendingStats,
+        isSyncing,
         toastMessage
     ) { flows: Array<Any?> ->
         @Suppress("UNCHECKED_CAST")
@@ -80,7 +107,8 @@ class AttendanceViewModel(private val repository: AppRepository) : ViewModel() {
         val dialogOpen = flows[4] as Boolean
         val eventType = flows[5] as EventType
         val stats = flows[6] as PendingSendStats?
-        val toast = flows[7] as String?
+        val syncing = flows[7] as Boolean
+        val toast = flows[8] as String?
 
         val recordMap = records.associateBy { it.studentId }
 
@@ -110,6 +138,7 @@ class AttendanceViewModel(private val repository: AppRepository) : ViewModel() {
             isConfirmDialogOpen = dialogOpen,
             confirmEventType = eventType,
             pendingSendStats = stats,
+            isSyncing = syncing,
             toastMessage = toast
         )
     }.stateIn(

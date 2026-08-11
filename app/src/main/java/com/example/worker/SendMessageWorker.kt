@@ -19,14 +19,10 @@ class SendMessageWorker(
     override suspend fun doWork(): Result {
         return try {
             val app = applicationContext as? TeacherAttendanceApp ?: return Result.failure()
-
-            runCatching {
-                setForeground(createForegroundInfo())
-            }
-
             app.repository.processPendingSmsMessages()
             Result.success()
         } catch (e: Exception) {
+            e.printStackTrace()
             Result.retry()
         }
     }

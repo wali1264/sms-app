@@ -25,20 +25,11 @@ data class StudentsUiState(
     val whatsappPhoneInput: String = "",
     val codeInput: String = "",
     val errorMessage: String? = null,
+    val isSyncing: Boolean = false,
     val toastMessage: String? = null
 )
 
 class StudentsViewModel(private val repository: AppRepository) : ViewModel() {
-
-    init {
-        viewModelScope.launch {
-            try {
-                repository.syncWithCloudIfAvailable()
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-    }
 
     private val searchQuery = MutableStateFlow("")
     private val isFormDialogOpen = MutableStateFlow(false)
@@ -52,7 +43,38 @@ class StudentsViewModel(private val repository: AppRepository) : ViewModel() {
     private val codeInput = MutableStateFlow("")
 
     private val errorMessage = MutableStateFlow<String?>(null)
+    private val isSyncing = MutableStateFlow(false)
     private val toastMessage = MutableStateFlow<String?>(null)
+
+    init {
+        viewModelScope.launch {
+            while (true) {
+                try {
+                    isSyncing.value = true
+                    repository.syncWithCloudIfAvailable()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                } finally {
+                    isSyncing.value = false
+                }
+                kotlinx.coroutines.delay(5000)
+            }
+        }
+    }
+
+    fun manualRefresh() {
+        viewModelScope.launch {
+            try {
+                isSyncing.value = true
+                repository.syncWithCloudIfAvailable()
+                toastMessage.value = "اطلاعات بروزرسانی شد."
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                isSyncing.value = false
+            }
+        }
+    }
 
     val uiState: StateFlow<StudentsUiState> = combine(
         searchQuery.flatMapLatest { query -> repository.searchStudents(query) },
@@ -66,6 +88,7 @@ class StudentsViewModel(private val repository: AppRepository) : ViewModel() {
         whatsappPhoneInput,
         codeInput,
         errorMessage,
+        isSyncing,
         toastMessage
     ) { flows: Array<Any?> ->
         @Suppress("UNCHECKED_CAST")
@@ -80,7 +103,8 @@ class StudentsViewModel(private val repository: AppRepository) : ViewModel() {
         val whatsapp = flows[8] as String
         val code = flows[9] as String
         val error = flows[10] as String?
-        val toast = flows[11] as String?
+        val syncing = flows[11] as Boolean
+        val toast = flows[12] as String?
 
         StudentsUiState(
             students = students,
@@ -94,6 +118,7 @@ class StudentsViewModel(private val repository: AppRepository) : ViewModel() {
             whatsappPhoneInput = whatsapp,
             codeInput = code,
             errorMessage = error,
+            isSyncing = syncing,
             toastMessage = toast
         )
     }.stateIn(
