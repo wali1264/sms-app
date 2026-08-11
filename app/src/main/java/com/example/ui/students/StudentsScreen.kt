@@ -15,7 +15,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -85,26 +87,14 @@ fun StudentsScreen(
             }
         }
     ) { paddingValues ->
+        val isOnline = authManager?.isNetworkAvailable() ?: true
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
                 .background(MaterialTheme.colorScheme.background)
         ) {
-            if (authManager != null && authManager.isTeacher() && !authManager.isNetworkAvailable()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color(0xFFFFF3CD))
-                        .padding(horizontal = 16.dp, vertical = 10.dp)
-                ) {
-                    Text(
-                        text = "⚠️ اتصال اینترنت برقرار نیست. برای افزودن، ویرایش یا حذف شاگرد توسط معلم، اتصال به اینترنت ضروری است.",
-                        color = Color(0xFF856404),
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
-            }
             // Header Title
             Row(
                 modifier = Modifier
@@ -113,11 +103,23 @@ fun StudentsScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "فهرست شاگردان",
-                    style = MaterialTheme.typography.headlineLarge,
-                    color = TextPrimary
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "فهرست شاگردان",
+                        style = MaterialTheme.typography.headlineLarge,
+                        color = TextPrimary
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .clip(CircleShape)
+                            .background(if (isOnline) Color(0xFF2E7D32) else Color(0xFFC62828))
+                            .testTag("students_network_status_dot")
+                    )
+                }
                 Text(
                     text = "${uiState.students.size} نفر",
                     style = MaterialTheme.typography.bodyLarge,

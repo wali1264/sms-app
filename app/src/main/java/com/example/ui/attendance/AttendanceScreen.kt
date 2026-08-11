@@ -55,36 +55,6 @@ fun AttendanceScreen(
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
-        // Network Status Banner for Manager & Teacher
-        Surface(
-            color = if (isOnline) Color(0xFFE8F5E9) else Color(0xFFFFEBEE),
-            modifier = Modifier.fillMaxWidth().testTag("network_status_banner")
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(10.dp)
-                        .clip(CircleShape)
-                        .background(if (isOnline) Color(0xFF2E7D32) else Color(0xFFC62828))
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = when {
-                        isTeacher && isOnline -> "معلم - آنلاین (ثبت حضور و غیاب مجاز است)"
-                        isTeacher && !isOnline -> "معلم - آفلاین (برای ثبت حضور و غیاب، اتصال اینترنت الزامی است)"
-                        !isTeacher && isOnline -> "مدیر - آنلاین (ذخیره‌سازی روی حافظه دستگاه + همگام‌سازی ابری)"
-                        else -> "مدیر - آفلاین (کامل بومی روی حافظه دستگاه بدون نیاز به اینترنت)"
-                    },
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = if (isOnline) Color(0xFF1B5E20) else Color(0xFFB71C1C)
-                )
-            }
-        }
-
         // App Bar Header
         Row(
             modifier = Modifier
@@ -94,11 +64,23 @@ fun AttendanceScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column {
-                Text(
-                    text = "حضور و غیاب",
-                    style = MaterialTheme.typography.headlineLarge,
-                    color = TextPrimary
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "حضور و غیاب",
+                        style = MaterialTheme.typography.headlineLarge,
+                        color = TextPrimary
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .clip(CircleShape)
+                            .background(if (isOnline) Color(0xFF2E7D32) else Color(0xFFC62828))
+                            .testTag("network_status_dot")
+                    )
+                }
                 Text(
                     text = uiState.dateFormatted,
                     style = MaterialTheme.typography.bodyMedium,
