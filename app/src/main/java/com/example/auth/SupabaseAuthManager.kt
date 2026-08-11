@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.provider.Settings
+import com.example.util.AppLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -74,6 +75,33 @@ class SupabaseAuthManager(private val context: Context) {
         restoreLocalSession()
     }
 
+    fun getSavedRole(): String = prefs.getString("role", "MANAGER") ?: "MANAGER"
+
+    fun getSavedSchoolCode(): String {
+        val saved = prefs.getString("school_code", "") ?: ""
+        if (saved.isNotBlank() && saved != "null") return saved
+        val state = _authState.value
+        if (state is AuthState.LoggedIn && state.schoolCode.isNotBlank() && state.schoolCode != "null") {
+            return state.schoolCode
+        }
+        return ""
+    }
+
+    fun extractSchoolCodeFromProfile(profile: JSONObject?, defaultSchoolCode: String = ""): String {
+        if (profile == null) return defaultSchoolCode
+        val rawSchoolCode = profile.optString("school_code", "").trim()
+        val rawManagerCode = profile.optString("manager_code", "").trim()
+        return when {
+            rawSchoolCode.isNotEmpty() && rawSchoolCode != "null" -> rawSchoolCode
+            rawManagerCode.isNotEmpty() && rawManagerCode != "null" -> rawManagerCode
+            else -> defaultSchoolCode
+        }
+    }
+
+    fun getAccessToken(): String = prefs.getString("access_token", "") ?: ""
+    fun isTeacher(): Boolean = getSavedRole() == "TEACHER"
+    fun isManager(): Boolean = getSavedRole() == "MANAGER"
+
     fun isNetworkAvailable(): Boolean {
         val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val network = connectivityManager.activeNetwork ?: return false
@@ -106,10 +134,15 @@ class SupabaseAuthManager(private val context: Context) {
                     schoolName = schoolName
                 )
             } else {
+                val pendingMsg = if (role == "MANAGER") {
+                    "حساب کاربری شما در انتظار تأیید سوپر ادمین است. لطفاً منتظر بمانید."
+                } else {
+                    "حساب کاربری شما در انتظار تأیید مدیر مدرسه است. لطفاً منتظر بمانید."
+                }
                 _authState.value = AuthState.PendingApproval(
                     userId = userId,
                     email = email,
-                    message = "حساب کاربری شما در انتظار تأیید مدیر مدرسه است."
+                    message = pendingMsg
                 )
             }
         } else {
@@ -182,8 +215,27 @@ class SupabaseAuthManager(private val context: Context) {
 
     private fun generateNextSchoolCode(): String {
         return try {
+            // First attempt: Call RPC function get_next_school_code if defined
+            val rpcRequest = Request.Builder()
+                .url("$SUPABASE_URL/rest/v1/rpc/get_next_school_code")
+                .addHeader("apikey", SUPABASE_ANON_KEY)
+                .addHeader("Authorization", "Bearer $SUPABASE_ANON_KEY")
+                .addHeader("Content-Type", "application/json")
+                .post("{}".toRequestBody(jsonMediaType))
+                .build()
+
+            val rpcResponse = client.newCall(rpcRequest).execute()
+            val rpcString = rpcResponse.body?.string()?.trim() ?: ""
+            if (rpcResponse.isSuccessful && rpcString.isNotEmpty()) {
+                val cleanCode = rpcString.replace("\"", "")
+                if (cleanCode.toIntOrNull() != null) {
+                    return cleanCode
+                }
+            }
+
+            // Query all profiles to find maximum school_code
             val request = Request.Builder()
-                .url("$SUPABASE_URL/rest/v1/profiles?role=eq.MANAGER&select=school_code&order=school_code.desc&limit=1")
+                .url("$SUPABASE_URL/rest/v1/profiles?select=school_code")
                 .addHeader("apikey", SUPABASE_ANON_KEY)
                 .addHeader("Authorization", "Bearer $SUPABASE_ANON_KEY")
                 .get()
@@ -193,16 +245,23 @@ class SupabaseAuthManager(private val context: Context) {
             val responseString = response.body?.string() ?: ""
             if (response.isSuccessful && responseString.isNotEmpty()) {
                 val arr = JSONArray(responseString)
-                if (arr.length() > 0) {
-                    val lastCodeStr = arr.getJSONObject(0).optString("school_code", "999")
-                    val lastCodeInt = lastCodeStr.toIntOrNull() ?: 999
-                    return (lastCodeInt + 1).toString()
+                var maxCode = 999
+                for (i in 0 until arr.length()) {
+                    val rawVal = arr.getJSONObject(i).opt("school_code")
+                    val codeInt = when (rawVal) {
+                        is Number -> rawVal.toInt()
+                        is String -> rawVal.toIntOrNull()
+                        else -> null
+                    }
+                    if (codeInt != null && codeInt > maxCode) {
+                        maxCode = codeInt
+                    }
                 }
+                return (maxCode + 1).toString()
             }
             "1000"
         } catch (e: Exception) {
-            val randomOffset = (100..999).random()
-            "1$randomOffset"
+            "1000"
         }
     }
 
@@ -248,9 +307,38 @@ class SupabaseAuthManager(private val context: Context) {
                 return@withContext Result.failure(Exception("شناسه کاربری دریافت نشد."))
             }
 
+            var accessToken = json.optString("access_token", "")
+            if (accessToken.isEmpty()) {
+                accessToken = json.optJSONObject("session")?.optString("access_token", "") ?: ""
+            }
+
+            // If token empty, do login to obtain JWT access token for RLS
+            if (accessToken.isEmpty()) {
+                try {
+                    val loginBody = JSONObject().apply {
+                        put("email", email)
+                        put("password", password)
+                    }.toString()
+                    val tokenReq = Request.Builder()
+                        .url("$SUPABASE_URL/auth/v1/token?grant_type=password")
+                        .addHeader("apikey", SUPABASE_ANON_KEY)
+                        .addHeader("Content-Type", "application/json")
+                        .post(loginBody.toRequestBody(jsonMediaType))
+                        .build()
+                    val tokenResp = client.newCall(tokenReq).execute()
+                    val tokenStr = tokenResp.body?.string() ?: ""
+                    if (tokenResp.isSuccessful && tokenStr.isNotEmpty()) {
+                        val tokenJson = JSONObject(tokenStr)
+                        accessToken = tokenJson.optString("access_token", "")
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+
             val schoolCode = generateNextSchoolCode()
 
-            // Manager is approved by default
+            // Manager profile requires super admin approval
             createOrUpdateProfile(
                 userId = userId,
                 email = email,
@@ -260,11 +348,26 @@ class SupabaseAuthManager(private val context: Context) {
                 phone = phone,
                 schoolCode = schoolCode,
                 managerId = null,
-                isApproved = true,
-                deviceId = currentDeviceId
+                isApproved = false,
+                deviceId = currentDeviceId,
+                accessToken = accessToken
             )
 
-            return@withContext Result.success("ثبت‌نام مدیر با موفقیت انجام شد. کد اختصاصی مدرسه شما: $schoolCode")
+            saveLocalSession(
+                userId = userId,
+                email = email,
+                accessToken = accessToken,
+                isApproved = false,
+                role = "MANAGER",
+                schoolCode = schoolCode,
+                fullName = fullName,
+                schoolName = schoolName
+            )
+
+            val pendingMsg = "حساب کاربری شما در انتظار تأیید توسط سوپر ادمین است. لطفاً منتظر بمانید."
+            _authState.value = AuthState.PendingApproval(userId, email, pendingMsg)
+
+            return@withContext Result.success("ثبت‌نام مدیر با موفقیت انجام شد. کد اختصاصی مدرسه شما: $schoolCode\nحساب کاربری شما در انتظار تأیید توسط سوپر ادمین است.")
         } catch (e: Exception) {
             return@withContext Result.failure(Exception("خطایی رخ داد: ${e.localizedMessage}"))
         }
@@ -318,6 +421,34 @@ class SupabaseAuthManager(private val context: Context) {
                 return@withContext Result.failure(Exception("شناسه کاربری دریافت نشد."))
             }
 
+            var accessToken = json.optString("access_token", "")
+            if (accessToken.isEmpty()) {
+                accessToken = json.optJSONObject("session")?.optString("access_token", "") ?: ""
+            }
+
+            if (accessToken.isEmpty()) {
+                try {
+                    val loginBody = JSONObject().apply {
+                        put("email", email)
+                        put("password", password)
+                    }.toString()
+                    val tokenReq = Request.Builder()
+                        .url("$SUPABASE_URL/auth/v1/token?grant_type=password")
+                        .addHeader("apikey", SUPABASE_ANON_KEY)
+                        .addHeader("Content-Type", "application/json")
+                        .post(loginBody.toRequestBody(jsonMediaType))
+                        .build()
+                    val tokenResp = client.newCall(tokenReq).execute()
+                    val tokenStr = tokenResp.body?.string() ?: ""
+                    if (tokenResp.isSuccessful && tokenStr.isNotEmpty()) {
+                        val tokenJson = JSONObject(tokenStr)
+                        accessToken = tokenJson.optString("access_token", "")
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+
             // Teacher profile requires manager approval
             createOrUpdateProfile(
                 userId = userId,
@@ -329,8 +460,23 @@ class SupabaseAuthManager(private val context: Context) {
                 schoolCode = managerDetails.schoolCode,
                 managerId = managerDetails.managerId,
                 isApproved = false,
-                deviceId = currentDeviceId
+                deviceId = currentDeviceId,
+                accessToken = accessToken
             )
+
+            saveLocalSession(
+                userId = userId,
+                email = email,
+                accessToken = accessToken,
+                isApproved = false,
+                role = "TEACHER",
+                schoolCode = managerDetails.schoolCode,
+                fullName = fullName,
+                schoolName = managerDetails.schoolName
+            )
+
+            val pendingMsg = "حساب کاربری شما در انتظار تأیید مدیر مدرسه است. لطفاً منتظر بمانید."
+            _authState.value = AuthState.PendingApproval(userId, email, pendingMsg)
 
             return@withContext Result.success("ثبت‌نام شما با موفقیت انجام شد و در انتظار تأیید مدیر مدرسه بمانید.")
         } catch (e: Exception) {
@@ -405,8 +551,13 @@ class SupabaseAuthManager(private val context: Context) {
             // Fetch profile
             val profile = fetchProfile(userId, accessToken)
             val role = profile?.optString("role", "MANAGER") ?: "MANAGER"
-            val isApproved = profile?.optBoolean("is_approved", role == "MANAGER") ?: (role == "MANAGER")
-            val schoolCode = profile?.optString("school_code", "") ?: ""
+            val rawApproved = profile?.opt("is_approved")
+            val isApproved = when {
+                rawApproved is Boolean -> rawApproved
+                rawApproved is String -> rawApproved.lowercase() == "true" || rawApproved == "1"
+                else -> false
+            }
+            val schoolCode = extractSchoolCodeFromProfile(profile, prefs.getString("school_code", "") ?: "")
             val fullName = profile?.optString("full_name", "") ?: ""
             val schoolName = profile?.optString("school_name", "") ?: ""
             val deviceIdInDb = profile?.optString("device_id", null)
@@ -440,7 +591,12 @@ class SupabaseAuthManager(private val context: Context) {
                     schoolName = schoolName
                 )
             } else {
-                AuthState.PendingApproval(userId, email, "حساب کاربری شما در انتظار تأیید مدیر مدرسه است.")
+                val pendingMsg = if (role == "MANAGER") {
+                    "حساب کاربری شما در انتظار تأیید توسط سوپر ادمین است. لطفاً منتظر بمانید."
+                } else {
+                    "حساب کاربری شما در انتظار تأیید مدیر مدرسه است. لطفاً منتظر بمانید."
+                }
+                AuthState.PendingApproval(userId, email, pendingMsg)
             }
 
             _authState.value = newState
@@ -460,11 +616,106 @@ class SupabaseAuthManager(private val context: Context) {
         }
 
         try {
-            val profile = fetchProfile(userId, accessToken)
+            var profile = fetchProfile(userId, accessToken)
+            if (profile == null) {
+                profile = fetchProfile(userId, "")
+            }
+            if (profile == null) {
+                // Profile row is missing in Supabase! Repair it in Supabase using local session info
+                val savedRole = prefs.getString("role", "MANAGER") ?: "MANAGER"
+                val savedFullName = prefs.getString("full_name", "") ?: ""
+                val savedSchoolName = prefs.getString("school_name", "") ?: ""
+                val savedSchoolCode = prefs.getString("school_code", "") ?: ""
+                val finalCode = if (savedSchoolCode.isNotEmpty()) savedSchoolCode else generateNextSchoolCode()
+
+                createOrUpdateProfile(
+                    userId = userId,
+                    email = email,
+                    role = savedRole,
+                    fullName = savedFullName,
+                    schoolName = savedSchoolName,
+                    phone = "",
+                    schoolCode = finalCode,
+                    managerId = null,
+                    isApproved = false,
+                    deviceId = currentDeviceId,
+                    accessToken = accessToken
+                )
+                profile = fetchProfile(userId, accessToken) ?: fetchProfile(userId, "")
+            }
+
             if (profile != null) {
-                val role = profile.optString("role", "MANAGER")
-                val isApproved = profile.optBoolean("is_approved", role == "MANAGER")
-                val schoolCode = profile.optString("school_code", "")
+                // If profile in Supabase was created as default TEACHER without school_code by database trigger,
+                // but local session was registered as MANAGER, repair profile in Supabase
+                val dbRole = profile.optString("role", "")
+                val dbSchoolCode = profile.optString("school_code", "")
+                val savedRole = prefs.getString("role", null)
+
+                if (savedRole == "MANAGER" && (dbRole != "MANAGER" || dbSchoolCode.isEmpty() || dbSchoolCode == "null")) {
+                    val savedSchoolCode = prefs.getString("school_code", "") ?: ""
+                    val finalCode = if (savedSchoolCode.isNotEmpty()) savedSchoolCode else generateNextSchoolCode()
+                    val savedFullName = prefs.getString("full_name", "") ?: profile.optString("full_name", "")
+                    val savedSchoolName = prefs.getString("school_name", "") ?: profile.optString("school_name", "")
+                    val currentIsApproved = when {
+                        profile.opt("is_approved") is Boolean -> profile.getBoolean("is_approved")
+                        profile.opt("is_approved") is String -> profile.optString("is_approved").lowercase() == "true" || profile.optString("is_approved") == "1"
+                        else -> false
+                    }
+
+                    createOrUpdateProfile(
+                        userId = userId,
+                        email = email,
+                        role = "MANAGER",
+                        fullName = savedFullName,
+                        schoolName = savedSchoolName,
+                        phone = profile.optString("phone", ""),
+                        schoolCode = finalCode,
+                        managerId = null,
+                        isApproved = currentIsApproved,
+                        deviceId = currentDeviceId,
+                        accessToken = accessToken
+                    )
+                    profile = fetchProfile(userId, accessToken) ?: fetchProfile(userId, "") ?: profile
+                } else if (savedRole == "TEACHER" || dbRole == "TEACHER") {
+                    val dbManagerCode = profile.optString("manager_code", "")
+                    val effectiveTeacherCode = if (dbSchoolCode.isNotEmpty() && dbSchoolCode != "null") dbSchoolCode
+                        else if (dbManagerCode.isNotEmpty() && dbManagerCode != "null") dbManagerCode
+                        else prefs.getString("school_code", "") ?: ""
+
+                    if (effectiveTeacherCode.isNotEmpty() && (dbSchoolCode.isEmpty() || dbSchoolCode == "null")) {
+                        val savedFullName = prefs.getString("full_name", "") ?: profile.optString("full_name", "")
+                        val savedSchoolName = prefs.getString("school_name", "") ?: profile.optString("school_name", "")
+                        val currentIsApproved = when {
+                            profile.opt("is_approved") is Boolean -> profile.getBoolean("is_approved")
+                            profile.opt("is_approved") is String -> profile.optString("is_approved").lowercase() == "true" || profile.optString("is_approved") == "1"
+                            else -> false
+                        }
+
+                        createOrUpdateProfile(
+                            userId = userId,
+                            email = email,
+                            role = "TEACHER",
+                            fullName = savedFullName,
+                            schoolName = savedSchoolName,
+                            phone = profile.optString("phone", ""),
+                            schoolCode = effectiveTeacherCode,
+                            managerId = if (profile.has("manager_id") && !profile.isNull("manager_id")) profile.optString("manager_id", null)?.takeIf { it != "null" } else null,
+                            isApproved = currentIsApproved,
+                            deviceId = currentDeviceId,
+                            accessToken = accessToken
+                        )
+                        profile = fetchProfile(userId, accessToken) ?: fetchProfile(userId, "") ?: profile
+                    }
+                }
+
+                val role = profile.optString("role", prefs.getString("role", "MANAGER") ?: "MANAGER")
+                val rawApproved = profile.opt("is_approved")
+                val isApproved = when {
+                    rawApproved is Boolean -> rawApproved
+                    rawApproved is String -> rawApproved.lowercase() == "true" || rawApproved == "1"
+                    else -> false
+                }
+                val schoolCode = extractSchoolCodeFromProfile(profile, prefs.getString("school_code", "") ?: "")
                 val fullName = profile.optString("full_name", "")
                 val schoolName = profile.optString("school_name", "")
                 val deviceIdInDb = profile.optString("device_id", null)
@@ -497,7 +748,12 @@ class SupabaseAuthManager(private val context: Context) {
                         schoolName = schoolName
                     )
                 } else {
-                    AuthState.PendingApproval(userId, email, "حساب کاربری شما در انتظار تأیید مدیر مدرسه است.")
+                    val pendingMsg = if (role == "MANAGER") {
+                        "حساب کاربری شما در انتظار تأیید توسط سوپر ادمین است. لطفاً منتظر بمانید."
+                    } else {
+                        "حساب کاربری شما در انتظار تأیید مدیر مدرسه است. لطفاً منتظر بمانید."
+                    }
+                    AuthState.PendingApproval(userId, email, pendingMsg)
                 }
                 _authState.value = newState
                 return@withContext newState
@@ -515,7 +771,7 @@ class SupabaseAuthManager(private val context: Context) {
                 return@withContext Result.failure(Exception("اتصال اینترنت برقرار نیست."))
             }
             val request = Request.Builder()
-                .url("$SUPABASE_URL/rest/v1/profiles?role=eq.TEACHER&school_code=eq.$schoolCode&select=id,email,full_name,phone,is_approved")
+                .url("$SUPABASE_URL/rest/v1/profiles?role=eq.TEACHER&or=(school_code.eq.$schoolCode,manager_code.eq.$schoolCode)&select=id,email,full_name,phone,is_approved")
                 .addHeader("apikey", SUPABASE_ANON_KEY)
                 .addHeader("Authorization", "Bearer $SUPABASE_ANON_KEY")
                 .get()
@@ -552,25 +808,131 @@ class SupabaseAuthManager(private val context: Context) {
             if (!isNetworkAvailable()) {
                 return@withContext Result.failure(Exception("اتصال اینترنت برقرار نیست."))
             }
+
+            val accessToken = prefs.getString("access_token", "") ?: ""
+            val authHeader = if (accessToken.isNotEmpty()) "Bearer $accessToken" else "Bearer $SUPABASE_ANON_KEY"
+
+            // 1. Try RPC function approve_teacher
+            val rpcBody = JSONObject().apply {
+                put("p_teacher_id", teacherUserId)
+                put("p_approved", isApproved)
+            }.toString()
+
+            val rpcRequest = Request.Builder()
+                .url("$SUPABASE_URL/rest/v1/rpc/approve_teacher")
+                .addHeader("apikey", SUPABASE_ANON_KEY)
+                .addHeader("Authorization", authHeader)
+                .addHeader("Content-Type", "application/json")
+                .post(rpcBody.toRequestBody(jsonMediaType))
+                .build()
+
+            try {
+                val rpcResponse = client.newCall(rpcRequest).execute()
+                val rpcStr = rpcResponse.body?.string() ?: ""
+                if (rpcResponse.isSuccessful && rpcStr.trim() == "true") {
+                    return@withContext Result.success(Unit)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+
+            // 2. Direct PATCH fallback
             val bodyJson = JSONObject().apply {
                 put("is_approved", isApproved)
                 put("updated_at", "now()")
             }.toString()
 
-            val request = Request.Builder()
-                .url("$SUPABASE_URL/rest/v1/profiles?id=eq.$teacherUserId")
+            val headersToTry = mutableListOf<String>()
+            if (accessToken.isNotEmpty()) {
+                headersToTry.add("Bearer $accessToken")
+            }
+            headersToTry.add("Bearer $SUPABASE_ANON_KEY")
+
+            for (hHeader in headersToTry) {
+                val request = Request.Builder()
+                    .url("$SUPABASE_URL/rest/v1/profiles?id=eq.$teacherUserId")
+                    .addHeader("apikey", SUPABASE_ANON_KEY)
+                    .addHeader("Authorization", hHeader)
+                    .addHeader("Content-Type", "application/json")
+                    .addHeader("Prefer", "return=representation")
+                    .patch(bodyJson.toRequestBody(jsonMediaType))
+                    .build()
+
+                val response = client.newCall(request).execute()
+                val responseString = response.body?.string() ?: ""
+
+                if (response.isSuccessful) {
+                    if (response.code == 204 || (responseString.startsWith("[") && JSONArray(responseString).length() > 0)) {
+                        return@withContext Result.success(Unit)
+                    }
+                }
+            }
+
+            return@withContext Result.failure(Exception("تغییرات انجام نشد. لطفاً کوئری SQL جدید را در Supabase اجرا نمایید."))
+        } catch (e: Exception) {
+            return@withContext Result.failure(Exception("خطا: ${e.localizedMessage}"))
+        }
+    }
+
+    suspend fun deleteTeacher(teacherUserId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            if (!isNetworkAvailable()) {
+                return@withContext Result.failure(Exception("اتصال اینترنت برقرار نیست."))
+            }
+
+            val accessToken = prefs.getString("access_token", "") ?: ""
+            val authHeader = if (accessToken.isNotEmpty()) "Bearer $accessToken" else "Bearer $SUPABASE_ANON_KEY"
+
+            // 1. Try RPC function delete_teacher_by_manager
+            val rpcBody = JSONObject().apply {
+                put("p_teacher_id", teacherUserId)
+            }.toString()
+
+            val rpcRequest = Request.Builder()
+                .url("$SUPABASE_URL/rest/v1/rpc/delete_teacher_by_manager")
                 .addHeader("apikey", SUPABASE_ANON_KEY)
-                .addHeader("Authorization", "Bearer $SUPABASE_ANON_KEY")
+                .addHeader("Authorization", authHeader)
                 .addHeader("Content-Type", "application/json")
-                .patch(bodyJson.toRequestBody(jsonMediaType))
+                .post(rpcBody.toRequestBody(jsonMediaType))
                 .build()
 
-            val response = client.newCall(request).execute()
-            if (response.isSuccessful) {
-                return@withContext Result.success(Unit)
-            } else {
-                return@withContext Result.failure(Exception("خطا در تغییر وضعیت معلم."))
+            try {
+                val rpcResponse = client.newCall(rpcRequest).execute()
+                val rpcStr = rpcResponse.body?.string() ?: ""
+                if (rpcResponse.isSuccessful && rpcStr.trim() == "true") {
+                    return@withContext Result.success(Unit)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
+
+            // 2. Direct DELETE fallback
+            val headersToTry = mutableListOf<String>()
+            if (accessToken.isNotEmpty()) {
+                headersToTry.add("Bearer $accessToken")
+            }
+            headersToTry.add("Bearer $SUPABASE_ANON_KEY")
+
+            for (hHeader in headersToTry) {
+                val request = Request.Builder()
+                    .url("$SUPABASE_URL/rest/v1/profiles?id=eq.$teacherUserId")
+                    .addHeader("apikey", SUPABASE_ANON_KEY)
+                    .addHeader("Authorization", hHeader)
+                    .addHeader("Prefer", "return=representation")
+                    .delete()
+                    .build()
+
+                val response = client.newCall(request).execute()
+                val responseString = response.body?.string() ?: ""
+
+                if (response.isSuccessful) {
+                    if (response.code == 204 || (responseString.startsWith("[") && JSONArray(responseString).length() > 0)) {
+                        return@withContext Result.success(Unit)
+                    }
+                }
+            }
+
+            return@withContext Result.failure(Exception("حذف انجام نشد. لطفاً کوئری SQL جدید را در Supabase اجرا نمایید."))
         } catch (e: Exception) {
             return@withContext Result.failure(Exception("خطا: ${e.localizedMessage}"))
         }
@@ -597,20 +959,51 @@ class SupabaseAuthManager(private val context: Context) {
     }
 
     private fun fetchProfile(userId: String, accessToken: String): JSONObject? {
+        val authHeader = if (accessToken.isNotEmpty()) "Bearer $accessToken" else "Bearer $SUPABASE_ANON_KEY"
         val request = Request.Builder()
             .url("$SUPABASE_URL/rest/v1/profiles?id=eq.$userId&select=*")
             .addHeader("apikey", SUPABASE_ANON_KEY)
-            .addHeader("Authorization", "Bearer ${accessToken.ifEmpty { SUPABASE_ANON_KEY }}")
+            .addHeader("Authorization", authHeader)
             .get()
             .build()
 
-        val response = client.newCall(request).execute()
-        val responseString = response.body?.string() ?: ""
+        try {
+            val response = client.newCall(request).execute()
+            val responseString = response.body?.string() ?: ""
 
-        if (response.isSuccessful && responseString.isNotEmpty()) {
-            val jsonArray = JSONArray(responseString)
-            if (jsonArray.length() > 0) {
-                return jsonArray.getJSONObject(0)
+            if (response.isSuccessful && responseString.isNotEmpty()) {
+                val jsonArray = JSONArray(responseString)
+                if (jsonArray.length() > 0) {
+                    return jsonArray.getJSONObject(0)
+                }
+            } else if (response.code == 500 && responseString.contains("infinite recursion")) {
+                android.util.Log.w("SupabaseAuthManager", "Supabase RLS Policy Infinite Recursion detected on profiles table.")
+                return null
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        // Retry with ANON KEY header if access token query returned empty or failed
+        if (accessToken.isNotEmpty()) {
+            try {
+                val fallbackRequest = Request.Builder()
+                    .url("$SUPABASE_URL/rest/v1/profiles?id=eq.$userId&select=*")
+                    .addHeader("apikey", SUPABASE_ANON_KEY)
+                    .addHeader("Authorization", "Bearer $SUPABASE_ANON_KEY")
+                    .get()
+                    .build()
+
+                val fallbackResponse = client.newCall(fallbackRequest).execute()
+                val fallbackString = fallbackResponse.body?.string() ?: ""
+                if (fallbackResponse.isSuccessful && fallbackString.isNotEmpty()) {
+                    val jsonArray = JSONArray(fallbackString)
+                    if (jsonArray.length() > 0) {
+                        return jsonArray.getJSONObject(0)
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
         }
         return null
@@ -626,7 +1019,8 @@ class SupabaseAuthManager(private val context: Context) {
         schoolCode: String,
         managerId: String?,
         isApproved: Boolean,
-        deviceId: String?
+        deviceId: String?,
+        accessToken: String = ""
     ) {
         val bodyJson = JSONObject().apply {
             put("id", userId)
@@ -635,23 +1029,87 @@ class SupabaseAuthManager(private val context: Context) {
             put("full_name", fullName)
             put("school_name", schoolName)
             put("phone", phone)
-            put("school_code", schoolCode)
-            if (managerId != null) put("manager_id", managerId) else put("manager_id", JSONObject.NULL)
-            put("is_approved", isApproved)
-            put("device_id", deviceId ?: JSONObject.NULL)
+            val codeInt = schoolCode.toIntOrNull()
+            if (role == "MANAGER") {
+                if (codeInt != null) put("school_code", codeInt) else put("school_code", JSONObject.NULL)
+                put("manager_code", JSONObject.NULL)
+            } else if (role == "TEACHER") {
+                put("school_code", JSONObject.NULL)
+                if (codeInt != null) put("manager_code", codeInt) else put("manager_code", JSONObject.NULL)
+            } else {
+                if (codeInt != null) put("school_code", codeInt) else put("school_code", JSONObject.NULL)
+                if (codeInt != null) put("manager_code", codeInt) else put("manager_code", JSONObject.NULL)
+            }
+            val validManagerId = if (!managerId.isNullOrBlank() && managerId != "null") managerId else null
+            if (validManagerId != null) put("manager_id", validManagerId) else put("manager_id", JSONObject.NULL)
+
+            val validDeviceId = if (!deviceId.isNullOrBlank() && deviceId != "null") deviceId else null
+            if (validDeviceId != null) put("device_id", validDeviceId) else put("device_id", JSONObject.NULL)
             put("updated_at", "now()")
         }.toString()
 
-        val request = Request.Builder()
-            .url("$SUPABASE_URL/rest/v1/profiles")
+        val authHeader = if (accessToken.isNotEmpty()) "Bearer $accessToken" else "Bearer $SUPABASE_ANON_KEY"
+
+        // First attempt: PATCH request to update existing profile (e.g. inserted by handle_new_user trigger)
+        val patchRequest = Request.Builder()
+            .url("$SUPABASE_URL/rest/v1/profiles?id=eq.$userId")
             .addHeader("apikey", SUPABASE_ANON_KEY)
-            .addHeader("Authorization", "Bearer $SUPABASE_ANON_KEY")
+            .addHeader("Authorization", authHeader)
+            .addHeader("Content-Type", "application/json")
+            .addHeader("Prefer", "return=representation")
+            .patch(bodyJson.toRequestBody(jsonMediaType))
+            .build()
+
+        var isRlsRecursionError = false
+
+        try {
+            val response = client.newCall(patchRequest).execute()
+            val respStr = response.body?.string() ?: ""
+            if (response.isSuccessful) {
+                val jsonArr = try { JSONArray(respStr) } catch (e: Exception) { null }
+                if (jsonArr != null && jsonArr.length() > 0) {
+                    return
+                }
+            } else {
+                if (response.code == 500 && respStr.contains("infinite recursion")) {
+                    isRlsRecursionError = true
+                    android.util.Log.e("SupabaseAuthManager", "PATCH profile failed due to Supabase RLS Policy Infinite Recursion (42P17).")
+                } else {
+                    android.util.Log.e("SupabaseAuthManager", "PATCH profile failed: code=${response.code}, body=$respStr")
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        if (isRlsRecursionError) {
+            // Do not retry POST if the table's RLS policy itself is crashing PostgreSQL
+            return
+        }
+
+        // Second attempt: POST request with on_conflict=id and merge-duplicates
+        val postRequest = Request.Builder()
+            .url("$SUPABASE_URL/rest/v1/profiles?on_conflict=id")
+            .addHeader("apikey", SUPABASE_ANON_KEY)
+            .addHeader("Authorization", authHeader)
             .addHeader("Content-Type", "application/json")
             .addHeader("Prefer", "resolution=merge-duplicates")
             .post(bodyJson.toRequestBody(jsonMediaType))
             .build()
 
-        client.newCall(request).execute()
+        try {
+            val response = client.newCall(postRequest).execute()
+            val respStr = response.body?.string() ?: ""
+            if (!response.isSuccessful) {
+                if (response.code == 500 && respStr.contains("infinite recursion")) {
+                    android.util.Log.e("SupabaseAuthManager", "POST profile failed due to Supabase RLS Policy Infinite Recursion (42P17).")
+                } else {
+                    android.util.Log.e("SupabaseAuthManager", "POST profile failed: code=${response.code}, body=$respStr")
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     private fun updateDeviceId(userId: String, accessToken: String, deviceId: String?) {
@@ -677,44 +1135,123 @@ class SupabaseAuthManager(private val context: Context) {
 
     suspend fun syncStudentsToCloud(schoolCode: String, studentsJson: String): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            if (!isNetworkAvailable() || schoolCode.isBlank()) {
+            val effectiveCode = if (schoolCode.isNotBlank() && schoolCode != "null") schoolCode else getSavedSchoolCode()
+            if (!isNetworkAvailable() || effectiveCode.isBlank()) {
+                AppLogger.d("SyncCloud", "همگام‌سازی انجام نشد: اینترنت متصل نیست یا کد مدرسه خالی است ($effectiveCode)")
                 return@withContext Result.success(Unit)
             }
+            val authToken = getAccessToken().ifEmpty { SUPABASE_ANON_KEY }
+            val codeInt = effectiveCode.toLongOrNull()
+            AppLogger.i("SyncCloud", "شروع همگام‌سازی ابری برای کد مدرسه $effectiveCode...")
+
+            // 1. Sync full JSON backup to school_backups table
             val bodyJson = JSONObject().apply {
-                put("school_code", schoolCode)
+                if (codeInt != null) put("school_code", codeInt) else put("school_code", effectiveCode)
                 put("data_json", studentsJson)
                 put("updated_at", "now()")
             }.toString()
 
             val request = Request.Builder()
-                .url("$SUPABASE_URL/rest/v1/school_backups")
+                .url("$SUPABASE_URL/rest/v1/school_backups?on_conflict=school_code")
                 .addHeader("apikey", SUPABASE_ANON_KEY)
-                .addHeader("Authorization", "Bearer $SUPABASE_ANON_KEY")
+                .addHeader("Authorization", "Bearer $authToken")
                 .addHeader("Content-Type", "application/json")
                 .addHeader("Prefer", "resolution=merge-duplicates")
                 .post(bodyJson.toRequestBody(jsonMediaType))
                 .build()
 
             val response = client.newCall(request).execute()
-            if (response.isSuccessful) {
-                return@withContext Result.success(Unit)
+            if (!response.isSuccessful) {
+                val errBody = response.body?.string() ?: ""
+                AppLogger.e("SyncCloud", "خطا در جدول school_backups: کد ${response.code} | متن: $errBody")
             } else {
-                return@withContext Result.failure(Exception("خطا در همگام‌سازی با ابر: کد ${response.code}"))
+                AppLogger.i("SyncCloud", "جدول school_backups با موفقیت بروزرسانی شد.")
             }
+
+            // 2. Also sync individual rows to public.students table
+            try {
+                val root = JSONObject(studentsJson)
+                if (root.has("students")) {
+                    val studentsArr = root.getJSONArray("students")
+                    val studentsPayload = JSONArray()
+                    for (i in 0 until studentsArr.length()) {
+                        val s = studentsArr.getJSONObject(i)
+                        val studentObj = JSONObject().apply {
+                            put("local_id", s.optLong("id", 0L))
+                            if (codeInt != null) {
+                                put("school_code", codeInt)
+                            } else {
+                                put("school_code", effectiveCode)
+                            }
+                            put("first_name", s.optString("name", ""))
+                            put("last_name", "")
+                            put("father_name", s.optString("fatherName", ""))
+                            put("phone_number", s.optString("smsPhone", ""))
+                            put("grade", s.optString("studentCode", ""))
+                            put("status", if (s.optBoolean("isActive", true)) "ACTIVE" else "INACTIVE")
+                        }
+                        studentsPayload.put(studentObj)
+                    }
+
+                    if (studentsPayload.length() > 0) {
+                        AppLogger.i("SyncCloud", "ارسال ${studentsPayload.length()} دانش‌آموز به جدول students...")
+                        // Attempt 1: Upsert with on_conflict=local_id,school_code
+                        val studentsReq = Request.Builder()
+                            .url("$SUPABASE_URL/rest/v1/students?on_conflict=local_id,school_code")
+                            .addHeader("apikey", SUPABASE_ANON_KEY)
+                            .addHeader("Authorization", "Bearer $authToken")
+                            .addHeader("Content-Type", "application/json")
+                            .addHeader("Prefer", "resolution=merge-duplicates")
+                            .post(studentsPayload.toString().toRequestBody(jsonMediaType))
+                            .build()
+
+                        val studResp = client.newCall(studentsReq).execute()
+                        val studErrBody = studResp.body?.string() ?: ""
+                        if (!studResp.isSuccessful) {
+                            AppLogger.e("SyncCloud", "خطا در جدول students (روش ۱): کد ${studResp.code} | $studErrBody")
+                            
+                            // Attempt 2: Fallback to plain POST (without on_conflict query param)
+                            val fallbackReq = Request.Builder()
+                                .url("$SUPABASE_URL/rest/v1/students")
+                                .addHeader("apikey", SUPABASE_ANON_KEY)
+                                .addHeader("Authorization", "Bearer $authToken")
+                                .addHeader("Content-Type", "application/json")
+                                .post(studentsPayload.toString().toRequestBody(jsonMediaType))
+                                .build()
+                            val fallbackResp = client.newCall(fallbackReq).execute()
+                            val fbErr = fallbackResp.body?.string() ?: ""
+                            if (!fallbackResp.isSuccessful) {
+                                AppLogger.e("SyncCloud", "خطا در جدول students (روش ۲): کد ${fallbackResp.code} | $fbErr")
+                            } else {
+                                AppLogger.i("SyncCloud", "جدول students با روش ۲ بروزرسانی شد.")
+                            }
+                        } else {
+                            AppLogger.i("SyncCloud", "جدول students با موفقیت بروزرسانی شد.")
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                AppLogger.e("SyncCloud", "خطا در پارس لیست دانش‌آموزان", e)
+            }
+
+            return@withContext Result.success(Unit)
         } catch (e: Exception) {
+            AppLogger.e("SyncCloud", "استثنا در همگام‌سازی ابری", e)
             return@withContext Result.failure(e)
         }
     }
 
     suspend fun fetchStudentsFromCloud(schoolCode: String): Result<String?> = withContext(Dispatchers.IO) {
         try {
-            if (!isNetworkAvailable() || schoolCode.isBlank()) {
+            val effectiveCode = if (schoolCode.isNotBlank() && schoolCode != "null") schoolCode else getSavedSchoolCode()
+            if (!isNetworkAvailable() || effectiveCode.isBlank()) {
                 return@withContext Result.success(null)
             }
+            val authToken = getAccessToken().ifEmpty { SUPABASE_ANON_KEY }
             val request = Request.Builder()
-                .url("$SUPABASE_URL/rest/v1/school_backups?school_code=eq.$schoolCode&select=data_json")
+                .url("$SUPABASE_URL/rest/v1/school_backups?school_code=eq.$effectiveCode&select=data_json")
                 .addHeader("apikey", SUPABASE_ANON_KEY)
-                .addHeader("Authorization", "Bearer $SUPABASE_ANON_KEY")
+                .addHeader("Authorization", "Bearer $authToken")
                 .get()
                 .build()
 
@@ -725,11 +1262,15 @@ class SupabaseAuthManager(private val context: Context) {
                 val arr = JSONArray(responseString)
                 if (arr.length() > 0) {
                     val dataJson = arr.getJSONObject(0).optString("data_json", null)
+                    AppLogger.i("FetchCloud", "اطلاعات پشتیبان از ابر بازیابی شد.")
                     return@withContext Result.success(dataJson)
                 }
+            } else {
+                AppLogger.e("FetchCloud", "خطا در دریافت پشتیبان از ابر: کد ${response.code} | $responseString")
             }
             return@withContext Result.success(null)
         } catch (e: Exception) {
+            AppLogger.e("FetchCloud", "استثنا در دریافت پشتیبان ابری", e)
             return@withContext Result.failure(e)
         }
     }

@@ -30,6 +30,16 @@ data class StudentsUiState(
 
 class StudentsViewModel(private val repository: AppRepository) : ViewModel() {
 
+    init {
+        viewModelScope.launch {
+            try {
+                repository.syncWithCloudIfAvailable()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
     private val searchQuery = MutableStateFlow("")
     private val isFormDialogOpen = MutableStateFlow(false)
     private val editingStudent = MutableStateFlow<Student?>(null)
@@ -151,32 +161,37 @@ class StudentsViewModel(private val repository: AppRepository) : ViewModel() {
         }
 
         viewModelScope.launch {
-            val currentEditing = editingStudent.value
-            if (currentEditing == null) {
-                repository.insertStudent(
-                    Student(
-                        name = name,
-                        fatherName = father,
-                        smsPhone = sms,
-                        whatsappPhone = whatsapp,
-                        studentCode = code
+            try {
+                val currentEditing = editingStudent.value
+                if (currentEditing == null) {
+                    repository.insertStudent(
+                        Student(
+                            name = name,
+                            fatherName = father,
+                            smsPhone = sms,
+                            whatsappPhone = whatsapp,
+                            studentCode = code
+                        )
                     )
-                )
-                toastMessage.value = "شاگرد جدید با موفقیت اضافه شد."
-            } else {
-                repository.updateStudent(
-                    currentEditing.copy(
-                        name = name,
-                        fatherName = father,
-                        smsPhone = sms,
-                        whatsappPhone = whatsapp,
-                        studentCode = code
+                    toastMessage.value = "شاگرد جدید با موفقیت اضافه شد."
+                } else {
+                    repository.updateStudent(
+                        currentEditing.copy(
+                            name = name,
+                            fatherName = father,
+                            smsPhone = sms,
+                            whatsappPhone = whatsapp,
+                            studentCode = code
+                        )
                     )
-                )
-                toastMessage.value = "اطلاعات شاگرد بروزرسانی شد."
+                    toastMessage.value = "اطلاعات شاگرد بروزرسانی شد."
+                }
+                isFormDialogOpen.value = false
+                editingStudent.value = null
+            } catch (e: Exception) {
+                errorMessage.value = e.localizedMessage ?: "خطایی رخ داد."
+                toastMessage.value = e.localizedMessage ?: "خطایی رخ داد."
             }
-            isFormDialogOpen.value = false
-            editingStudent.value = null
         }
     }
 
@@ -191,9 +206,13 @@ class StudentsViewModel(private val repository: AppRepository) : ViewModel() {
     fun deleteStudentConfirmed() {
         val student = studentToDelete.value ?: return
         viewModelScope.launch {
-            repository.deleteStudent(student.id)
-            studentToDelete.value = null
-            toastMessage.value = "شاگرد حذف شد."
+            try {
+                repository.deleteStudent(student.id)
+                studentToDelete.value = null
+                toastMessage.value = "شاگرد حذف شد."
+            } catch (e: Exception) {
+                toastMessage.value = e.localizedMessage ?: "خطایی رخ داد."
+            }
         }
     }
 

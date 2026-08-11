@@ -28,7 +28,8 @@ class TeacherAttendanceApp : Application() {
             messageDao = database.messageDao(),
             settingsDao = database.settingsDao(),
             smsSender = AndroidSmsSender(this),
-            context = this
+            context = this,
+            authManager = authManager
         )
     }
 

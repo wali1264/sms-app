@@ -55,8 +55,54 @@ class AppRepository(
     private val messageDao: MessageDao,
     private val settingsDao: SettingsDao,
     private val smsSender: SmsSender,
-    private val context: Context
+    private val context: Context,
+    private val authManager: com.example.auth.SupabaseAuthManager? = null
 ) {
+
+    private fun checkTeacherInternetPermission() {
+        if (authManager != null && authManager.isTeacher()) {
+            if (!authManager.isNetworkAvailable()) {
+                throw IllegalStateException("جهت انجام عملیات توسط معلم، اتصال به اینترنت ضروری است.")
+            }
+        }
+    }
+
+    private suspend fun triggerCloudSync() {
+        authManager?.let { auth ->
+            val schoolCode = auth.getSavedSchoolCode()
+            if (auth.isNetworkAvailable() && schoolCode.isNotBlank()) {
+                try {
+                    val backupJson = exportBackupJson()
+                    auth.syncStudentsToCloud(schoolCode, backupJson)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+    }
+
+    suspend fun syncWithCloudIfAvailable(): Result<String> = withContext(Dispatchers.IO) {
+        val auth = authManager ?: return@withContext Result.success("آفلاین")
+        if (!auth.isNetworkAvailable()) {
+            return@withContext Result.success("آفلاین - استفاده از اطلاعات محلی")
+        }
+        val schoolCode = auth.getSavedSchoolCode()
+        if (schoolCode.isBlank()) {
+            return@withContext Result.success("کد مدرسه مشخص نیست.")
+        }
+        try {
+            val cloudRes = auth.fetchStudentsFromCloud(schoolCode)
+            val jsonStr = cloudRes.getOrNull()
+            if (!jsonStr.isNullOrBlank()) {
+                importBackupJson(jsonStr)
+            }
+            val backupJson = exportBackupJson()
+            auth.syncStudentsToCloud(schoolCode, backupJson)
+            return@withContext Result.success("همگام‌سازی ابری با موفقیت انجام شد.")
+        } catch (e: Exception) {
+            return@withContext Result.failure(e)
+        }
+    }
 
     // --- Students ---
     val allActiveStudents: Flow<List<Student>> = studentDao.getAllActiveStudents()
@@ -71,11 +117,24 @@ class AppRepository(
 
     suspend fun getStudentById(id: Long): Student? = studentDao.getStudentById(id)
 
-    suspend fun insertStudent(student: Student): Long = studentDao.insertStudent(student)
+    suspend fun insertStudent(student: Student): Long {
+        checkTeacherInternetPermission()
+        val id = studentDao.insertStudent(student)
+        triggerCloudSync()
+        return id
+    }
 
-    suspend fun updateStudent(student: Student) = studentDao.updateStudent(student)
+    suspend fun updateStudent(student: Student) {
+        checkTeacherInternetPermission()
+        studentDao.updateStudent(student)
+        triggerCloudSync()
+    }
 
-    suspend fun deleteStudent(id: Long) = studentDao.softDeleteStudent(id)
+    suspend fun deleteStudent(id: Long) {
+        checkTeacherInternetPermission()
+        studentDao.softDeleteStudent(id)
+        triggerCloudSync()
+    }
 
     // --- Settings ---
     val appSettingsFlow: Flow<AppSettings> = settingsDao.getSettingsFlow().map { it ?: AppSettings() }
@@ -90,10 +149,12 @@ class AppRepository(
     }
 
     suspend fun setAttendanceStatus(studentId: Long, dateStr: String, isPresent: Boolean) {
+        checkTeacherInternetPermission()
         val existing = attendanceDao.getStudentAttendanceForDate(studentId, dateStr)
         val record = existing?.copy(isPresent = isPresent, updatedAt = System.currentTimeMillis())
             ?: AttendanceRecord(studentId = studentId, date = dateStr, isPresent = isPresent)
         attendanceDao.insertOrUpdateAttendance(record)
+        triggerCloudSync()
     }
 
     suspend fun markAllDefaultPresent(dateStr: String, students: List<Student>) {

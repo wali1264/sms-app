@@ -50,6 +50,7 @@ fun SettingsScreen(
     val isOnline = authManager?.isNetworkAvailable() ?: true
 
     val isManager = (authState as? AuthState.LoggedIn)?.role == "MANAGER"
+    var showConsoleDialog by remember { mutableStateOf(false) }
 
     // Load teachers list when screen opens for Manager
     LaunchedEffect(authState) {
@@ -76,12 +77,29 @@ fun SettingsScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Title
-        Text(
-            text = "تنظیمات",
-            style = MaterialTheme.typography.headlineLarge,
-            color = TextPrimary
-        )
+        // Title & Debug Console Button
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "تنظیمات",
+                style = MaterialTheme.typography.headlineLarge,
+                color = TextPrimary
+            )
+
+            IconButton(
+                onClick = { showConsoleDialog = true },
+                modifier = Modifier.testTag("btn_open_debug_console")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Terminal,
+                    contentDescription = "کنسول عیب‌یابی",
+                    tint = TextSecondary.copy(alpha = 0.6f)
+                )
+            }
+        }
 
         // 0. User Account Card
         if (authManager != null && authState is AuthState.LoggedIn) {
@@ -339,25 +357,47 @@ fun SettingsScreen(
 
                                         Spacer(modifier = Modifier.width(8.dp))
 
-                                        Button(
-                                            onClick = {
-                                                viewModel.toggleTeacherApproval(
-                                                    authManager,
-                                                    teacher.id,
-                                                    teacher.isApproved,
-                                                    user.schoolCode
-                                                )
-                                            },
-                                            colors = ButtonDefaults.buttonColors(
-                                                containerColor = if (teacher.isApproved) MaterialTheme.colorScheme.error else Color(0xFF2E7D32)
-                                            ),
-                                            shape = RoundedCornerShape(8.dp),
-                                            modifier = Modifier.testTag("btn_toggle_teacher_${teacher.id}")
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                            verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Text(
-                                                text = if (teacher.isApproved) "غیرفعال" else "تأیید",
-                                                fontSize = 12.sp
-                                            )
+                                            Button(
+                                                onClick = {
+                                                    viewModel.toggleTeacherApproval(
+                                                        authManager,
+                                                        teacher.id,
+                                                        teacher.isApproved,
+                                                        user.schoolCode
+                                                    )
+                                                },
+                                                colors = ButtonDefaults.buttonColors(
+                                                    containerColor = if (teacher.isApproved) MaterialTheme.colorScheme.error else Color(0xFF2E7D32)
+                                                ),
+                                                shape = RoundedCornerShape(8.dp),
+                                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                                modifier = Modifier.testTag("btn_toggle_teacher_${teacher.id}")
+                                            ) {
+                                                Text(
+                                                    text = if (teacher.isApproved) "غیرفعال" else "تأیید",
+                                                    fontSize = 12.sp
+                                                )
+                                            }
+
+                                            OutlinedButton(
+                                                onClick = {
+                                                    viewModel.deleteTeacherRequest(
+                                                        authManager,
+                                                        teacher.id,
+                                                        user.schoolCode
+                                                    )
+                                                },
+                                                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                                                shape = RoundedCornerShape(8.dp),
+                                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                                modifier = Modifier.testTag("btn_delete_teacher_${teacher.id}")
+                                            ) {
+                                                Text("حذف", fontSize = 12.sp)
+                                            }
                                         }
                                     }
                                 }
@@ -774,6 +814,15 @@ fun SettingsScreen(
                     }
                 )
             }
+        }
+
+        // Debug Console Dialog
+        if (showConsoleDialog) {
+            DebugConsoleDialog(
+                onDismiss = { showConsoleDialog = false },
+                viewModel = viewModel,
+                authManager = authManager
+            )
         }
     }
 }

@@ -54,6 +54,7 @@ fun AuthScreen(
 ) {
     val authState by authManager.authState.collectAsState()
     val scope = rememberCoroutineScope()
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     var isLoginMode by remember { mutableStateOf(true) }
     var selectedRole by remember { mutableStateOf(UserRoleChoice.MANAGER) }
@@ -172,7 +173,14 @@ fun AuthScreen(
                             onClick = {
                                 scope.launch {
                                     isLoading = true
-                                    authManager.checkStatusAndSync()
+                                    val state = authManager.checkStatusAndSync()
+                                    if (state is com.example.auth.AuthState.LoggedIn) {
+                                        android.widget.Toast.makeText(context, "حساب شما تأیید شد و وارد شدید!", android.widget.Toast.LENGTH_SHORT).show()
+                                    } else if (state is com.example.auth.AuthState.PendingApproval) {
+                                        android.widget.Toast.makeText(context, "وضعیت حساب همچنان در انتظار تأیید است.", android.widget.Toast.LENGTH_SHORT).show()
+                                    } else if (state is com.example.auth.AuthState.Error) {
+                                        android.widget.Toast.makeText(context, state.message, android.widget.Toast.LENGTH_SHORT).show()
+                                    }
                                     isLoading = false
                                 }
                             },

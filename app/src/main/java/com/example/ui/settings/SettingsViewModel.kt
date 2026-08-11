@@ -62,6 +62,20 @@ class SettingsViewModel(private val repository: AppRepository) : ViewModel() {
         }
     }
 
+    fun deleteTeacherRequest(authManager: SupabaseAuthManager, teacherId: String, schoolCode: String) {
+        viewModelScope.launch {
+            _isLoadingTeachers.value = true
+            val res = authManager.deleteTeacher(teacherId)
+            res.onSuccess {
+                toastMessage.value = "درخواست معلم با موفقیت حذف شد."
+                loadTeachers(authManager, schoolCode)
+            }.onFailure { err ->
+                toastMessage.value = err.localizedMessage ?: "خطا در حذف درخواست معلم"
+                _isLoadingTeachers.value = false
+            }
+        }
+    }
+
     fun updateEnableSms(enabled: Boolean) {
         viewModelScope.launch {
             val current = settings.value

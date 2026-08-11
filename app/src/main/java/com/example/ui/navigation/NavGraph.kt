@@ -102,7 +102,7 @@ fun MainAppNavigation() {
                     val viewModel: StudentsViewModel = viewModel(
                         factory = StudentsViewModel.Factory(repository)
                     )
-                    StudentsScreen(viewModel = viewModel)
+                    StudentsScreen(viewModel = viewModel, authManager = authManager)
                 }
 
                 if (isManager) {

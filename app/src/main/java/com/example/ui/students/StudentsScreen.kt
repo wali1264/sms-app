@@ -58,7 +58,10 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 
 @Composable
-fun StudentsScreen(viewModel: StudentsViewModel) {
+fun StudentsScreen(
+    viewModel: StudentsViewModel,
+    authManager: com.example.auth.SupabaseAuthManager? = null
+) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
@@ -88,6 +91,20 @@ fun StudentsScreen(viewModel: StudentsViewModel) {
                 .padding(paddingValues)
                 .background(MaterialTheme.colorScheme.background)
         ) {
+            if (authManager != null && authManager.isTeacher() && !authManager.isNetworkAvailable()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFFFFF3CD))
+                        .padding(horizontal = 16.dp, vertical = 10.dp)
+                ) {
+                    Text(
+                        text = "⚠️ اتصال اینترنت برقرار نیست. برای افزودن، ویرایش یا حذف شاگرد توسط معلم، اتصال به اینترنت ضروری است.",
+                        color = Color(0xFF856404),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
             // Header Title
             Row(
                 modifier = Modifier

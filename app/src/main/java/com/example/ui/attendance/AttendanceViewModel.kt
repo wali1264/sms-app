@@ -49,6 +49,11 @@ class AttendanceViewModel(private val repository: AppRepository) : ViewModel() {
 
     init {
         viewModelScope.launch {
+            try {
+                repository.syncWithCloudIfAvailable()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
             val students = repository.allActiveStudents.firstOrNull() ?: emptyList()
             if (students.isNotEmpty()) {
                 repository.markAllDefaultPresent(dateIso, students)
@@ -119,7 +124,11 @@ class AttendanceViewModel(private val repository: AppRepository) : ViewModel() {
 
     fun toggleAttendance(studentId: Long, currentIsPresent: Boolean) {
         viewModelScope.launch {
-            repository.setAttendanceStatus(studentId, dateIso, !currentIsPresent)
+            try {
+                repository.setAttendanceStatus(studentId, dateIso, !currentIsPresent)
+            } catch (e: Exception) {
+                toastMessage.value = e.localizedMessage ?: "خطایی رخ داد."
+            }
         }
     }
 
