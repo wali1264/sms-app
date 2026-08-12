@@ -2,6 +2,7 @@ package com.example.ui.students
 
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,6 +22,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Person
@@ -31,6 +33,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -178,6 +181,54 @@ fun StudentsScreen(
                 onValueChange = { viewModel.onSearchQueryChanged(it) },
                 placeholder = { Text("جستجوی نام، نام پدر یا کد شاگرد...", style = MaterialTheme.typography.bodyMedium) },
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = TextSecondary) },
+                trailingIcon = {
+                    var classFilterExpanded by remember { mutableStateOf(false) }
+                    Box(modifier = Modifier.padding(end = 8.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { classFilterExpanded = true }
+                                .padding(horizontal = 6.dp, vertical = 4.dp)
+                                .testTag("students_class_filter_button")
+                        ) {
+                            Text(
+                                text = uiState.selectedClassFilter,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextSecondary
+                            )
+                            Spacer(modifier = Modifier.width(2.dp))
+                            Icon(
+                                imageVector = Icons.Default.ArrowDropDown,
+                                contentDescription = "فیلتر صنف",
+                                tint = TextSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+
+                        DropdownMenu(
+                            expanded = classFilterExpanded,
+                            onDismissRequest = { classFilterExpanded = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("همه صنف‌ها", style = MaterialTheme.typography.bodyMedium) },
+                                onClick = {
+                                    viewModel.onClassFilterChanged("همه صنف‌ها")
+                                    classFilterExpanded = false
+                                }
+                            )
+                            uiState.schoolClasses.distinctBy { it.name.trim() }.forEach { cls ->
+                                DropdownMenuItem(
+                                    text = { Text(cls.name, style = MaterialTheme.typography.bodyMedium) },
+                                    onClick = {
+                                        viewModel.onClassFilterChanged(cls.name)
+                                        classFilterExpanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 4.dp)

@@ -26,4 +26,7 @@ interface AttendanceDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertOrUpdateAll(attendanceRecords: List<AttendanceRecord>)
+
+    @Query("DELETE FROM attendance_records")
+    suspend fun deleteAllAttendanceRecords()
 }

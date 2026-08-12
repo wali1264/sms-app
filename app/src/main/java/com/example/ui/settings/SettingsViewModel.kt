@@ -166,18 +166,27 @@ class SettingsViewModel(private val repository: AppRepository) : ViewModel() {
         if (schoolClass.name.isBlank()) return
         viewModelScope.launch {
             val currentList = repository.getAllSchoolClasses()
+            val oldClass = currentList.find { it.id == schoolClass.id }
             if (currentList.any { it.id != schoolClass.id && it.name.trim().equals(schoolClass.name.trim(), ignoreCase = true) }) {
                 toastMessage.value = "صنفی با این نام قبلاً وجود دارد."
                 return@launch
             }
-            repository.updateSchoolClass(schoolClass)
+            if (oldClass != null && oldClass.name != schoolClass.name.trim()) {
+                repository.updateClassNameForStudents(oldClass.name, schoolClass.name.trim())
+            }
+            repository.updateSchoolClass(schoolClass.copy(name = schoolClass.name.trim()))
             toastMessage.value = "صنف با موفقیت ویرایش شد."
         }
     }
 
-    fun deleteSchoolClass(id: Long) {
+    fun deleteSchoolClass(schoolClass: SchoolClass) {
         viewModelScope.launch {
-            repository.deleteSchoolClass(id)
+            val studentCount = repository.getActiveStudentCountForClass(schoolClass.name)
+            if (studentCount > 0) {
+                toastMessage.value = "این صنف دارای $studentCount دانش‌آموز فعال است. امکان حذف وجود ندارد."
+                return@launch
+            }
+            repository.deleteSchoolClass(schoolClass.id)
             toastMessage.value = "صنف با موفقیت حذف شد."
         }
     }
@@ -194,9 +203,9 @@ class SettingsViewModel(private val repository: AppRepository) : ViewModel() {
         }
     }
 
-    fun importBackup(jsonStr: String) {
+    fun importBackup(jsonStr: String, authManager: SupabaseAuthManager, schoolCode: String) {
         viewModelScope.launch {
-            val result = repository.importBackupJson(jsonStr)
+            val result = repository.restoreBackupWithInternetCheck(jsonStr, schoolCode, authManager)
             result.onSuccess { msg ->
                 toastMessage.value = msg
             }.onFailure { err ->

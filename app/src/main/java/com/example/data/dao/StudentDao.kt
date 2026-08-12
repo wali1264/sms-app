@@ -34,6 +34,15 @@ interface StudentDao {
     @Query("UPDATE students SET isActive = 0 WHERE id = :id")
     suspend fun softDeleteStudent(id: Long)
 
+    @Query("DELETE FROM students")
+    suspend fun deleteAllStudents()
+
+    @Query("SELECT COUNT(*) FROM students WHERE isActive = 1 AND grade = :className")
+    suspend fun getActiveStudentCountForClass(className: String): Int
+
+    @Query("UPDATE students SET grade = :newName WHERE grade = :oldName")
+    suspend fun updateClassNameForStudents(oldName: String, newName: String)
+
     @Query("""
         SELECT * FROM students 
         WHERE isActive = 1 AND (

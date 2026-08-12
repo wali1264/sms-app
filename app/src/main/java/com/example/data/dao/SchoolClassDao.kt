@@ -28,6 +28,12 @@ interface SchoolClassDao {
     @Query("DELETE FROM school_classes WHERE id = :id")
     suspend fun deleteClassById(id: Long)
 
+    @Query("DELETE FROM school_classes")
+    suspend fun deleteAllClasses()
+
+    @Query("SELECT * FROM school_classes WHERE id = :id LIMIT 1")
+    suspend fun getClassById(id: Long): SchoolClass?
+
     @Query("SELECT COUNT(*) FROM school_classes")
     suspend fun getCount(): Int
 }

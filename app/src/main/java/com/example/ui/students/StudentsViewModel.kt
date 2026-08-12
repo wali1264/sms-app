@@ -17,6 +17,7 @@ import kotlinx.coroutines.launch
 data class StudentsUiState(
     val students: List<Student> = emptyList(),
     val searchQuery: String = "",
+    val selectedClassFilter: String = "همه صنف‌ها",
     val isFormDialogOpen: Boolean = false,
     val editingStudent: Student? = null,
     val studentToDelete: Student? = null,
@@ -35,8 +36,9 @@ data class StudentsUiState(
 class StudentsViewModel(private val repository: AppRepository) : ViewModel() {
 
     private val searchQuery = MutableStateFlow("")
+    private val selectedClassFilter = MutableStateFlow("همه صنف‌ها")
     private val isFormDialogOpen = MutableStateFlow(false)
-    private val editingStudent = MutableStateFlow<Student?>(null)
+    private val editingStudent = MutableStateFlow<Student?> (null)
     private val studentToDelete = MutableStateFlow<Student?>(null)
 
     private val nameInput = MutableStateFlow("")
@@ -83,6 +85,7 @@ class StudentsViewModel(private val repository: AppRepository) : ViewModel() {
     val uiState: StateFlow<StudentsUiState> = combine(
         searchQuery.flatMapLatest { query -> repository.searchStudents(query) },
         searchQuery,
+        selectedClassFilter,
         isFormDialogOpen,
         editingStudent,
         studentToDelete,
@@ -100,24 +103,32 @@ class StudentsViewModel(private val repository: AppRepository) : ViewModel() {
         @Suppress("UNCHECKED_CAST")
         val students = flows[0] as List<Student>
         val query = flows[1] as String
-        val dialog = flows[2] as Boolean
-        val editing = flows[3] as Student?
-        val deleting = flows[4] as Student?
-        val name = flows[5] as String
-        val father = flows[6] as String
-        val sms = flows[7] as String
-        val grade = flows[8] as String
-        val code = flows[9] as String
-        val codeDup = flows[10] as Boolean
+        val classFilter = flows[2] as String
+        val dialog = flows[3] as Boolean
+        val editing = flows[4] as Student?
+        val deleting = flows[5] as Student?
+        val name = flows[6] as String
+        val father = flows[7] as String
+        val sms = flows[8] as String
+        val grade = flows[9] as String
+        val code = flows[10] as String
+        val codeDup = flows[11] as Boolean
         @Suppress("UNCHECKED_CAST")
-        val classesList = flows[11] as List<SchoolClass>
-        val error = flows[12] as String?
-        val syncing = flows[13] as Boolean
-        val toast = flows[14] as String?
+        val classesList = flows[12] as List<SchoolClass>
+        val error = flows[13] as String?
+        val syncing = flows[14] as Boolean
+        val toast = flows[15] as String?
+
+        val filteredStudents = if (classFilter.isBlank() || classFilter == "همه صنف‌ها") {
+            students
+        } else {
+            students.filter { it.grade == classFilter }
+        }
 
         StudentsUiState(
-            students = students,
+            students = filteredStudents,
             searchQuery = query,
+            selectedClassFilter = classFilter,
             isFormDialogOpen = dialog,
             editingStudent = editing,
             studentToDelete = deleting,
@@ -140,6 +151,10 @@ class StudentsViewModel(private val repository: AppRepository) : ViewModel() {
 
     fun onSearchQueryChanged(query: String) {
         searchQuery.value = query
+    }
+
+    fun onClassFilterChanged(filter: String) {
+        selectedClassFilter.value = filter
     }
 
     fun openAddStudentDialog() {

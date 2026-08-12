@@ -84,6 +84,7 @@ class AppRepository(
     }
 
     suspend fun syncWithCloudIfAvailable(): Result<String> = withContext(Dispatchers.IO) {
+        cleanupAndSyncSchoolClasses(emptyList())
         val auth = authManager ?: return@withContext Result.success("آفلاین")
         if (!auth.isNetworkAvailable()) {
             return@withContext Result.success("آفلاین - استفاده از اطلاعات محلی")
@@ -154,13 +155,61 @@ class AppRepository(
     }
 
     // --- School Classes ---
-    val allSchoolClassesFlow: Flow<List<SchoolClass>> = schoolClassDao?.getAllClassesFlow() ?: kotlinx.coroutines.flow.flowOf(emptyList())
+    val allSchoolClassesFlow: Flow<List<SchoolClass>> = (schoolClassDao?.getAllClassesFlow() ?: kotlinx.coroutines.flow.flowOf(emptyList()))
+        .map { list -> list.distinctBy { it.name.trim() } }
 
-    suspend fun getAllSchoolClasses(): List<SchoolClass> = schoolClassDao?.getAllClassesList() ?: emptyList()
+    suspend fun getAllSchoolClasses(): List<SchoolClass> =
+        (schoolClassDao?.getAllClassesList() ?: emptyList()).distinctBy { it.name.trim() }
+
+    private suspend fun cleanupAndSyncSchoolClasses(importedClasses: List<SchoolClass>) {
+        val dao = schoolClassDao ?: return
+        val currentLocal = dao.getAllClassesList()
+
+        // 1. Remove duplicate records from local SQLite
+        val uniqueLocalByName = mutableMapOf<String, SchoolClass>()
+        val duplicateIdsToDelete = mutableListOf<Long>()
+
+        for (cls in currentLocal) {
+            val trimmed = cls.name.trim()
+            if (trimmed.isEmpty()) {
+                duplicateIdsToDelete.add(cls.id)
+                continue
+            }
+            if (uniqueLocalByName.containsKey(trimmed)) {
+                duplicateIdsToDelete.add(cls.id)
+            } else {
+                uniqueLocalByName[trimmed] = cls
+            }
+        }
+
+        for (dupId in duplicateIdsToDelete) {
+            dao.deleteClassById(dupId)
+        }
+
+        // 2. Insert or update imported classes
+        val distinctImported = importedClasses.distinctBy { it.name.trim() }
+        for (imp in distinctImported) {
+            val trimmed = imp.name.trim()
+            if (trimmed.isEmpty()) continue
+            val existing = uniqueLocalByName[trimmed]
+            if (existing == null) {
+                val newId = dao.insertClass(SchoolClass(name = trimmed, sortOrder = imp.sortOrder))
+                uniqueLocalByName[trimmed] = SchoolClass(id = newId, name = trimmed, sortOrder = imp.sortOrder)
+            } else if (existing.sortOrder != imp.sortOrder) {
+                dao.updateClass(existing.copy(sortOrder = imp.sortOrder))
+            }
+        }
+    }
 
     suspend fun insertSchoolClass(schoolClass: SchoolClass): Long {
         checkTeacherInternetPermission()
-        val id = schoolClassDao?.insertClass(schoolClass) ?: 0L
+        val dao = schoolClassDao ?: return 0L
+        val trimmedName = schoolClass.name.trim()
+        val existing = dao.getAllClassesList().find { it.name.trim() == trimmedName }
+        if (existing != null) {
+            return existing.id
+        }
+        val id = dao.insertClass(schoolClass.copy(name = trimmedName))
         triggerCloudSync()
         return id
     }
@@ -477,6 +526,15 @@ class AppRepository(
         }
     }
 
+    // --- Class Helpers ---
+    suspend fun getActiveStudentCountForClass(className: String): Int = withContext(Dispatchers.IO) {
+        studentDao.getActiveStudentCountForClass(className)
+    }
+
+    suspend fun updateClassNameForStudents(oldName: String, newName: String) = withContext(Dispatchers.IO) {
+        studentDao.updateClassNameForStudents(oldName, newName)
+    }
+
     // --- Backup & Restore (پشتیبان‌گیری و بازیابی) ---
     suspend fun exportBackupJson(): String = withContext(Dispatchers.IO) {
         val root = JSONObject()
@@ -545,11 +603,18 @@ class AppRepository(
         return@withContext root.toString(2)
     }
 
-    suspend fun importBackupJson(jsonStr: String): Result<String> = withContext(Dispatchers.IO) {
+    suspend fun importBackupJson(jsonStr: String, clearLocalFirst: Boolean = false): Result<String> = withContext(Dispatchers.IO) {
         try {
             val root = JSONObject(jsonStr)
             var restoredStudentsCount = 0
             var restoredAttendanceCount = 0
+
+            // If clearLocalFirst is requested, perform atomic wipe of local database tables
+            if (clearLocalFirst) {
+                studentDao.deleteAllStudents()
+                schoolClassDao?.deleteAllClasses()
+                attendanceDao.deleteAllAttendanceRecords()
+            }
 
             if (root.has("students")) {
                 val studentsArr = root.getJSONArray("students")
@@ -588,9 +653,9 @@ class AppRepository(
                         )
                     )
                 }
-                if (classesList.isNotEmpty()) {
-                    schoolClassDao?.insertClasses(classesList)
-                }
+                cleanupAndSyncSchoolClasses(classesList)
+            } else {
+                cleanupAndSyncSchoolClasses(emptyList())
             }
 
             if (root.has("attendance")) {
@@ -615,20 +680,22 @@ class AppRepository(
             }
 
             if (root.has("settings")) {
+                val existingLocal = settingsDao.getSettings()
                 val obj = root.getJSONObject("settings")
                 val targetName = obj.optString("notificationTarget", NotificationTarget.ABSENT_ONLY.name)
                 val targetEnum = try { NotificationTarget.valueOf(targetName) } catch (e: Exception) { NotificationTarget.ABSENT_ONLY }
 
+                // Preserve local hardware settings if existing on device
                 val appSettings = AppSettings(
                     id = 1,
                     enableSms = obj.optBoolean("enableSms", true),
-                    notificationTarget = targetEnum,
+                    notificationTarget = existingLocal?.notificationTarget ?: targetEnum,
                     enableDeparture = obj.optBoolean("enableDeparture", false),
                     absenceTemplate = obj.optString("absenceTemplate", "والد گرامی، فرزند شما {نام_شاگرد} امروز در مکتب حاضر نشده است. لطفاً پیگیری نمایید."),
                     arrivalTemplate = obj.optString("arrivalTemplate", "والد گرامی، فرزند شما {نام_شاگرد} امروز ساعت {ساعت} وارد مکتب شد."),
                     departureTemplate = obj.optString("departureTemplate", "والد گرامی، فرزند شما {نام_شاگرد} امروز ساعت {ساعت} از مکتب خارج شد."),
-                    selectedSubId = obj.optInt("selectedSubId", -1),
-                    pacingDelayMs = obj.optLong("pacingDelayMs", 2500L),
+                    selectedSubId = existingLocal?.selectedSubId ?: obj.optInt("selectedSubId", -1),
+                    pacingDelayMs = existingLocal?.pacingDelayMs ?: obj.optLong("pacingDelayMs", 2500L),
                     autoGenerateStudentCode = obj.optBoolean("autoGenerateStudentCode", true)
                 )
                 settingsDao.saveSettings(appSettings)
@@ -640,26 +707,54 @@ class AppRepository(
         }
     }
 
+    suspend fun restoreBackupWithInternetCheck(
+        jsonStr: String,
+        schoolCode: String,
+        authManager: com.example.auth.SupabaseAuthManager
+    ): Result<String> = withContext(Dispatchers.IO) {
+        if (!authManager.isNetworkAvailable()) {
+            return@withContext Result.failure(Exception("برای بازیابی فایل پشتیبان، اتصال به اینترنت الزامی است."))
+        }
+
+        // 1. Local atomic wipe and restore
+        val importRes = importBackupJson(jsonStr, clearLocalFirst = true)
+        if (importRes.isFailure) {
+            return@withContext importRes
+        }
+
+        // 2. Clear cloud DB & push new restored backup simultaneously
+        try {
+            val backupJson = exportBackupJson()
+            authManager.syncStudentsToCloud(schoolCode, backupJson, clearServerDataFirst = true)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        return@withContext importRes
+    }
+
     suspend fun syncManagerCloudRestore(schoolCode: String, authManager: com.example.auth.SupabaseAuthManager): Result<String> = withContext(Dispatchers.IO) {
         if (!authManager.isNetworkAvailable()) {
             return@withContext Result.success("آفلاین - اطلاعات محلی استفاده می‌شود.")
         }
         val localStudents = studentDao.getAllStudentsList()
-        if (localStudents.isEmpty()) {
-            // Local memory is empty. Check if cloud has a backup for this manager!
+        val localClasses = schoolClassDao?.getAllClassesList() ?: emptyList()
+
+        if (localStudents.isEmpty() && localClasses.isEmpty()) {
+            // Local memory is completely empty! Bootstrap / fetch from server first.
             val cloudRes = authManager.fetchStudentsFromCloud(schoolCode)
             val jsonStr = cloudRes.getOrNull()
             if (!jsonStr.isNullOrBlank()) {
-                val importRes = importBackupJson(jsonStr)
+                val importRes = importBackupJson(jsonStr, clearLocalFirst = true)
                 if (importRes.isSuccess) {
-                    return@withContext Result.success("اطلاعات شما با موفقیت از ابر بازیابی شد.")
+                    return@withContext Result.success("اطلاعات شما با موفقیت از ابر دریافت گردید.")
                 }
             }
         } else {
             // Local data exists. Push latest backup to cloud for safety.
             try {
                 val backupJson = exportBackupJson()
-                authManager.syncStudentsToCloud(schoolCode, backupJson)
+                authManager.syncStudentsToCloud(schoolCode, backupJson, clearServerDataFirst = false)
             } catch (e: Exception) {
                 e.printStackTrace()
             }

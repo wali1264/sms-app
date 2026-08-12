@@ -1146,7 +1146,7 @@ class SupabaseAuthManager(private val context: Context) {
         client.newCall(request).execute()
     }
 
-    suspend fun syncStudentsToCloud(schoolCode: String, studentsJson: String): Result<Unit> = withContext(Dispatchers.IO) {
+    suspend fun syncStudentsToCloud(schoolCode: String, studentsJson: String, clearServerDataFirst: Boolean = false): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             val effectiveCode = if (schoolCode.isNotBlank() && schoolCode != "null") schoolCode else getSavedSchoolCode()
             if (!isNetworkAvailable() || effectiveCode.isBlank()) {
@@ -1155,7 +1155,23 @@ class SupabaseAuthManager(private val context: Context) {
             }
             val authToken = getAccessToken().ifEmpty { SUPABASE_ANON_KEY }
             val codeInt = effectiveCode.toLongOrNull()
-            AppLogger.i("SyncCloud", "شروع همگام‌سازی ابری برای کد مدرسه $effectiveCode...")
+            AppLogger.i("SyncCloud", "شروع همگام‌سازی ابری برای کد مدرسه $effectiveCode (پاکسازی اولیه: $clearServerDataFirst)...")
+
+            if (clearServerDataFirst) {
+                try {
+                    val deleteQuery = if (codeInt != null) "$codeInt" else effectiveCode
+                    val delReq = Request.Builder()
+                        .url("$SUPABASE_URL/rest/v1/students?school_code=eq.$deleteQuery")
+                        .addHeader("apikey", SUPABASE_ANON_KEY)
+                        .addHeader("Authorization", "Bearer $authToken")
+                        .delete()
+                        .build()
+                    client.newCall(delReq).execute()
+                    AppLogger.i("SyncCloud", "دانش‌آموزان قبلی مکتب $deleteQuery از Supabase پاک‌سازی شدند.")
+                } catch (e: Exception) {
+                    AppLogger.e("SyncCloud", "خطا در پاک‌سازی دانش‌آموزان قبلی از Supabase", e)
+                }
+            }
 
             // 1. Sync full JSON backup to school_backups table
             val bodyJson = JSONObject().apply {

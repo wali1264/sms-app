@@ -863,7 +863,8 @@ fun SettingsScreen(
                         Button(
                             onClick = {
                                 if (importJsonText.isNotBlank()) {
-                                    viewModel.importBackup(importJsonText)
+                                    val currentSchoolCode = authManager?.getSavedSchoolCode() ?: ""
+                                    viewModel.importBackup(importJsonText, authManager, currentSchoolCode)
                                     showImportDialog = false
                                     importJsonText = ""
                                 } else {
@@ -912,6 +913,7 @@ fun SchoolClassesDialog(
     var newClassName by remember { mutableStateOf("") }
     var editingClass by remember { mutableStateOf<com.example.data.entity.SchoolClass?>(null) }
     var editClassName by remember { mutableStateOf("") }
+    var deletingClass by remember { mutableStateOf<com.example.data.entity.SchoolClass?>(null) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1013,7 +1015,7 @@ fun SchoolClassesDialog(
                                         }
 
                                         IconButton(
-                                            onClick = { viewModel.deleteSchoolClass(item.id) },
+                                            onClick = { deletingClass = item },
                                             modifier = Modifier.size(32.dp)
                                         ) {
                                             Icon(Icons.Default.Delete, contentDescription = "حذف", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
@@ -1068,6 +1070,32 @@ fun SchoolClassesDialog(
             },
             dismissButton = {
                 TextButton(onClick = { editingClass = null }) {
+                    Text("انصراف")
+                }
+            }
+        )
+    }
+
+    // Delete Class Confirmation Dialog
+    if (deletingClass != null) {
+        val targetClass = deletingClass!!
+        AlertDialog(
+            onDismissRequest = { deletingClass = null },
+            title = { Text("تأیید حذف صنف") },
+            text = { Text("آیا از حذف صنف «${targetClass.name}» اطمینان دارید؟") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.deleteSchoolClass(targetClass)
+                        deletingClass = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("حذف صنف")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { deletingClass = null }) {
                     Text("انصراف")
                 }
             }
