@@ -25,6 +25,9 @@ interface MessageDao {
     @Query("SELECT * FROM message_records WHERE id = :id LIMIT 1")
     suspend fun getMessageById(id: Long): MessageRecord?
 
+    @Query("SELECT * FROM message_records WHERE date = :date")
+    suspend fun getMessageRecordsForDate(date: String): List<MessageRecord>
+
     @Query("SELECT * FROM message_records WHERE studentId = :studentId AND date = :date AND eventType = :eventType AND channel = :channel LIMIT 1")
     suspend fun findExistingRecord(
         studentId: Long,
@@ -51,6 +54,9 @@ interface MessageDao {
     @Query("UPDATE message_records SET status = 'FAILED_UNKNOWN', errorMessage = 'ارسال به دلیل قطع شدن ناگهانی برنامه معلق ماند.' WHERE status = 'SENDING'")
     suspend fun markStuckSendingMessagesAsUnknown()
 
+    @Query("UPDATE message_records SET status = 'PENDING', attempts = 0, errorMessage = NULL WHERE status IN ('FAILED_RETRYABLE', 'FAILED_PERMANENT', 'FAILED_UNKNOWN')")
+    suspend fun resetFailedMessagesToPending()
+
     @Query("UPDATE message_records SET status = :status, sentAt = :sentAt, attempts = :attempts, errorMessage = :errorMessage, subId = :subId WHERE id = :id")
     suspend fun updateMessageResult(
         id: Long,
@@ -63,4 +69,7 @@ interface MessageDao {
 
     @Query("UPDATE message_records SET status = :status, sentAt = :sentAt, attempts = attempts + 1, errorMessage = :errorMessage WHERE id = :id")
     suspend fun updateMessageStatus(id: Long, status: MessageStatus, sentAt: Long?, errorMessage: String?)
+
+    @Query("DELETE FROM message_records WHERE createdAt < :thresholdTimestamp")
+    suspend fun deleteMessagesOlderThan(thresholdTimestamp: Long): Int
 }

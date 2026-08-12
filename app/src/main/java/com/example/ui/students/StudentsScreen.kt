@@ -31,6 +31,10 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -43,6 +47,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -221,6 +228,8 @@ fun StudentsScreen(
     // Add / Edit Dialog
     if (uiState.isFormDialogOpen) {
         val isEdit = uiState.editingStudent != null
+        var gradeExpanded by remember { mutableStateOf(false) }
+
         AlertDialog(
             onDismissRequest = { viewModel.dismissFormDialog() },
             title = {
@@ -261,19 +270,51 @@ fun StudentsScreen(
                         modifier = Modifier.fillMaxWidth().testTag("sms_phone_input")
                     )
 
-                    OutlinedTextField(
-                        value = uiState.whatsappPhoneInput,
-                        onValueChange = { viewModel.onWhatsappPhoneChanged(it) },
-                        label = { Text("شماره WhatsApp (اختیاری)") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth().testTag("whatsapp_phone_input")
-                    )
+                    // Grade Dropdown Menu
+                    @OptIn(ExperimentalMaterial3Api::class)
+                    ExposedDropdownMenuBox(
+                        expanded = gradeExpanded,
+                        onExpandedChange = { gradeExpanded = !gradeExpanded }
+                    ) {
+                        OutlinedTextField(
+                            value = uiState.gradeInput,
+                            onValueChange = { viewModel.onGradeChanged(it) },
+                            label = { Text("صنف / پایه") },
+                            readOnly = uiState.schoolClasses.isNotEmpty(),
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = gradeExpanded) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .menuAnchor()
+                                .testTag("grade_input")
+                        )
+                        if (uiState.schoolClasses.isNotEmpty()) {
+                            ExposedDropdownMenu(
+                                expanded = gradeExpanded,
+                                onDismissRequest = { gradeExpanded = false }
+                            ) {
+                                uiState.schoolClasses.forEach { cls ->
+                                    DropdownMenuItem(
+                                        text = { Text(cls.name) },
+                                        onClick = {
+                                            viewModel.onGradeChanged(cls.name)
+                                            gradeExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
 
                     OutlinedTextField(
                         value = uiState.codeInput,
                         onValueChange = { viewModel.onCodeChanged(it) },
-                        label = { Text("کد شاگرد (اختیاری)") },
+                        label = { Text("کد شاگرد (کد سیستم)") },
+                        isError = uiState.isCodeDuplicate,
+                        supportingText = {
+                            if (uiState.isCodeDuplicate) {
+                                Text("کد شاگرد تکراری است! لطفاً کد دیگری وارد کنید.", color = ErrorRed)
+                            }
+                        },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth().testTag("student_code_input")
                     )
@@ -282,6 +323,7 @@ fun StudentsScreen(
             confirmButton = {
                 Button(
                     onClick = { viewModel.saveStudent() },
+                    enabled = !uiState.isCodeDuplicate,
                     colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.testTag("save_student_button")
@@ -376,8 +418,8 @@ fun StudentItemCard(
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(text = student.smsPhone, style = MaterialTheme.typography.labelMedium, color = TextSecondary)
                     }
-                    if (student.whatsappPhone.isNotBlank()) {
-                        Text(text = "• WhatsApp: ${student.whatsappPhone}", style = MaterialTheme.typography.labelMedium, color = PrimaryBlue)
+                    if (student.grade.isNotBlank()) {
+                        Text(text = "• صنف: ${student.grade}", style = MaterialTheme.typography.labelMedium, color = PrimaryBlue)
                     }
                 }
             }

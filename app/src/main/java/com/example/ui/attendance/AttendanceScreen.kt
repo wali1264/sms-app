@@ -163,6 +163,8 @@ fun AttendanceScreen(
 
         // Summary Stats Card
         if (uiState.summary.totalStudents > 0) {
+            var isGradeDropdownExpanded by remember { mutableStateOf(false) }
+
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -173,13 +175,13 @@ fun AttendanceScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(16.dp),
+                        .padding(14.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text("شاگردان", style = MaterialTheme.typography.labelMedium, color = OnPrimaryContainerBlue.copy(alpha = 0.7f))
@@ -188,27 +190,78 @@ fun AttendanceScreen(
 
                         Box(modifier = Modifier.size(1.dp, 32.dp).background(OnPrimaryContainerBlue.copy(alpha = 0.15f)))
 
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("حاضر", style = MaterialTheme.typography.labelMedium, color = OnPrimaryContainerBlue.copy(alpha = 0.7f))
-                            Text("${uiState.summary.presentCount}", style = MaterialTheme.typography.titleLarge, color = OnPrimaryContainerBlue)
+                        // Present Filter Card Column
+                        val isPresentActive = uiState.statusFilter == AttendanceStatusFilter.PRESENT
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (isPresentActive) PrimaryBlue.copy(alpha = 0.25f) else Color.Transparent)
+                                .clickable { viewModel.toggleStatusFilter(AttendanceStatusFilter.PRESENT) }
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text("حاضر", style = MaterialTheme.typography.labelMedium, color = OnPrimaryContainerBlue.copy(alpha = 0.8f))
+                                Text("${uiState.summary.presentCount}", style = MaterialTheme.typography.titleLarge, color = OnPrimaryContainerBlue)
+                            }
                         }
 
                         Box(modifier = Modifier.size(1.dp, 32.dp).background(OnPrimaryContainerBlue.copy(alpha = 0.15f)))
 
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("غایب", style = MaterialTheme.typography.labelMedium, color = OnPrimaryContainerBlue.copy(alpha = 0.7f))
-                            Text("${uiState.summary.absentCount}", style = MaterialTheme.typography.titleLarge, color = ErrorRed)
+                        // Absent Filter Card Column
+                        val isAbsentActive = uiState.statusFilter == AttendanceStatusFilter.ABSENT
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (isAbsentActive) ErrorRed.copy(alpha = 0.25f) else Color.Transparent)
+                                .clickable { viewModel.toggleStatusFilter(AttendanceStatusFilter.ABSENT) }
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text("غایب", style = MaterialTheme.typography.labelMedium, color = ErrorRed)
+                                Text("${uiState.summary.absentCount}", style = MaterialTheme.typography.titleLarge, color = ErrorRed)
+                            }
                         }
                     }
 
-                    if (!isTeacher) {
-                        Button(
-                            onClick = { viewModel.openSendConfirmation(EventType.ARRIVAL) },
-                            colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
-                            shape = RoundedCornerShape(16.dp),
-                            modifier = Modifier.testTag("fast_send_button")
+                    // Grade Filter Dropdown
+                    Box {
+                        Surface(
+                            onClick = { isGradeDropdownExpanded = true },
+                            shape = RoundedCornerShape(12.dp),
+                            color = SecondaryContainer,
+                            modifier = Modifier.testTag("grade_dropdown_button")
                         ) {
-                            Text("ثبت نهایی", style = MaterialTheme.typography.bodyLarge, color = Color.White)
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    text = uiState.selectedGrade,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = TextPrimary
+                                )
+                                Icon(
+                                    imageVector = Icons.Default.ArrowDropDown,
+                                    contentDescription = "انتخاب صنف",
+                                    tint = TextPrimary
+                                )
+                            }
+                        }
+
+                        DropdownMenu(
+                            expanded = isGradeDropdownExpanded,
+                            onDismissRequest = { isGradeDropdownExpanded = false }
+                        ) {
+                            uiState.availableGrades.forEach { grade ->
+                                DropdownMenuItem(
+                                    text = { Text(grade, style = MaterialTheme.typography.bodyMedium) },
+                                    onClick = {
+                                        viewModel.selectGrade(grade)
+                                        isGradeDropdownExpanded = false
+                                    }
+                                )
+                            }
                         }
                     }
                 }
@@ -343,6 +396,13 @@ fun AttendanceScreen(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (stats != null) {
+                        Text(
+                            text = "صنف هدف: ${uiState.selectedGrade}",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = PrimaryBlue,
+                            fontWeight = FontWeight.Bold
+                        )
+
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
@@ -353,8 +413,7 @@ fun AttendanceScreen(
 
                         Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(DividerColor))
 
-                        Text("SMS: ${stats.smsCount} پیام", style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
-                        Text("WhatsApp: ${stats.whatsappCount} پیام", style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
+                        Text("SMS قابل ارسال: ${stats.smsCount} پیام", style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
                     } else {
                         Text("در حال محاسبه خلاصه ارسال...")
                     }

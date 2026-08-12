@@ -19,6 +19,9 @@ interface StudentDao {
     @Query("SELECT * FROM students WHERE id = :id LIMIT 1")
     suspend fun getStudentById(id: Long): Student?
 
+    @Query("SELECT * FROM students WHERE isActive = 1 AND studentCode = :code LIMIT 1")
+    suspend fun getStudentByCode(code: String): Student?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertStudent(student: Student): Long
 

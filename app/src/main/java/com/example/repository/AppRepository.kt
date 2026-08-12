@@ -8,6 +8,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import com.example.data.dao.AttendanceDao
 import com.example.data.dao.MessageDao
+import com.example.data.dao.SchoolClassDao
 import com.example.data.dao.SettingsDao
 import com.example.data.dao.StudentDao
 import com.example.data.entity.AppSettings
@@ -16,6 +17,7 @@ import com.example.data.entity.EventType
 import com.example.data.entity.MessageRecord
 import com.example.data.entity.MessageStatus
 import com.example.data.entity.NotificationTarget
+import com.example.data.entity.SchoolClass
 import com.example.data.entity.SendChannel
 import com.example.data.entity.Student
 import com.example.sms.SimInfo
@@ -45,7 +47,6 @@ data class PendingSendStats(
     val presentCount: Int,
     val absentCount: Int,
     val smsCount: Int,
-    val whatsappCount: Int,
     val targetStudentsCount: Int
 )
 
@@ -54,6 +55,7 @@ class AppRepository(
     private val attendanceDao: AttendanceDao,
     private val messageDao: MessageDao,
     private val settingsDao: SettingsDao,
+    private val schoolClassDao: SchoolClassDao? = null,
     private val smsSender: SmsSender,
     private val context: Context,
     private val authManager: com.example.auth.SupabaseAuthManager? = null
@@ -136,6 +138,45 @@ class AppRepository(
         triggerCloudSync()
     }
 
+    suspend fun isStudentCodeDuplicate(code: String, currentStudentId: Long = 0L): Boolean {
+        if (code.isBlank()) return false
+        val existing = studentDao.getStudentByCode(code.trim())
+        return existing != null && existing.id != currentStudentId
+    }
+
+    suspend fun generateNextStudentCode(): String {
+        val allStudents = studentDao.getAllStudentsList().filter { it.isActive }
+        val maxNumericCode = allStudents.mapNotNull { s ->
+            s.studentCode.trim().toLongOrNull()
+        }.maxOrNull() ?: 0L
+
+        return (maxNumericCode + 1).toString()
+    }
+
+    // --- School Classes ---
+    val allSchoolClassesFlow: Flow<List<SchoolClass>> = schoolClassDao?.getAllClassesFlow() ?: kotlinx.coroutines.flow.flowOf(emptyList())
+
+    suspend fun getAllSchoolClasses(): List<SchoolClass> = schoolClassDao?.getAllClassesList() ?: emptyList()
+
+    suspend fun insertSchoolClass(schoolClass: SchoolClass): Long {
+        checkTeacherInternetPermission()
+        val id = schoolClassDao?.insertClass(schoolClass) ?: 0L
+        triggerCloudSync()
+        return id
+    }
+
+    suspend fun updateSchoolClass(schoolClass: SchoolClass) {
+        checkTeacherInternetPermission()
+        schoolClassDao?.updateClass(schoolClass)
+        triggerCloudSync()
+    }
+
+    suspend fun deleteSchoolClass(id: Long) {
+        checkTeacherInternetPermission()
+        schoolClassDao?.deleteClassById(id)
+        triggerCloudSync()
+    }
+
     // --- Settings ---
     val appSettingsFlow: Flow<AppSettings> = settingsDao.getSettingsFlow().map { it ?: AppSettings() }
 
@@ -168,35 +209,75 @@ class AppRepository(
     // --- Messages ---
     val allMessagesFlow: Flow<List<MessageRecord>> = messageDao.getAllMessages()
 
-    suspend fun getPendingSendStats(dateStr: String, eventType: EventType): PendingSendStats {
-        val students = studentDao.getAllActiveStudents().firstOrNull() ?: emptyList()
-        val attendanceList = attendanceDao.getAttendanceListForDate(dateStr).associateBy { it.studentId }
+    suspend fun autoPurgeOldMessages(daysThreshold: Int = 30): Int = withContext(Dispatchers.IO) {
+        val thresholdMillis = System.currentTimeMillis() - (daysThreshold.toLong() * 24L * 60L * 60L * 1000L)
+        return@withContext messageDao.deleteMessagesOlderThan(thresholdMillis)
+    }
+
+    private fun isEligibleForMessage(
+        isPresent: Boolean,
+        eventType: EventType,
+        existingTypes: Set<EventType>,
+        settings: AppSettings
+    ): Boolean {
+        if (eventType == EventType.DEPARTURE) {
+            if (!isPresent) return false
+            if (existingTypes.contains(EventType.DEPARTURE)) return false
+            if (existingTypes.contains(EventType.ABSENCE)) return false
+            return true
+        } else {
+            if (isPresent) {
+                if (settings.notificationTarget == NotificationTarget.ABSENT_ONLY) return false
+                if (existingTypes.contains(EventType.ARRIVAL)) return false
+                if (existingTypes.contains(EventType.ABSENCE)) return false
+                return true
+            } else {
+                if (settings.notificationTarget == NotificationTarget.PRESENT_ONLY) return false
+                if (existingTypes.contains(EventType.ABSENCE)) return false
+                if (existingTypes.contains(EventType.ARRIVAL)) return false
+                return true
+            }
+        }
+    }
+
+    suspend fun getPendingSendStats(
+        dateStr: String,
+        eventType: EventType,
+        selectedGrade: String? = null
+    ): PendingSendStats {
+        val allActiveStudents = studentDao.getAllActiveStudents().firstOrNull() ?: emptyList()
+        val students = if (!selectedGrade.isNullOrBlank() && selectedGrade != "همه صنف‌ها") {
+            allActiveStudents.filter { it.grade == selectedGrade }
+        } else {
+            allActiveStudents
+        }
+
+        val attendanceMap = attendanceDao.getAttendanceListForDate(dateStr).associateBy { it.studentId }
+        val existingMessagesByStudent = messageDao.getMessageRecordsForDate(dateStr).groupBy { it.studentId }
         val settings = getSettings()
 
         var smsCount = 0
-        var whatsappCount = 0
         var targetStudents = 0
-
         var presentCount = 0
         var absentCount = 0
 
         students.forEach { student ->
-            val isPresent = attendanceList[student.id]?.isPresent ?: true
+            val isPresent = attendanceMap[student.id]?.isPresent ?: true
             if (isPresent) presentCount++ else absentCount++
 
-            val isTarget = when (eventType) {
-                EventType.DEPARTURE -> isPresent // Only present students get departure msg
-                else -> when (settings.notificationTarget) {
-                    NotificationTarget.ABSENT_ONLY -> !isPresent
-                    NotificationTarget.PRESENT_ONLY -> isPresent
-                    NotificationTarget.BOTH -> true
-                }
-            }
+            val studentMsgs = existingMessagesByStudent[student.id] ?: emptyList()
+            val sentTypes = studentMsgs.map { it.eventType }.toSet()
 
-            if (isTarget) {
+            val isEligible = isEligibleForMessage(
+                isPresent = isPresent,
+                eventType = eventType,
+                existingTypes = sentTypes,
+                settings = settings
+            )
+
+            if (isEligible) {
                 targetStudents++
                 if (settings.enableSms && student.smsPhone.isNotBlank()) smsCount++
-                if (settings.enableWhatsapp && student.whatsappPhone.isNotBlank()) whatsappCount++
             }
         }
 
@@ -204,14 +285,24 @@ class AppRepository(
             presentCount = presentCount,
             absentCount = absentCount,
             smsCount = smsCount,
-            whatsappCount = whatsappCount,
             targetStudentsCount = targetStudents
         )
     }
 
-    suspend fun queueAttendanceMessages(dateStr: String, eventType: EventType): Int {
-        val students = studentDao.getAllActiveStudents().firstOrNull() ?: emptyList()
+    suspend fun queueAttendanceMessages(
+        dateStr: String,
+        eventType: EventType,
+        selectedGrade: String? = null
+    ): Int {
+        val allActiveStudents = studentDao.getAllActiveStudents().firstOrNull() ?: emptyList()
+        val students = if (!selectedGrade.isNullOrBlank() && selectedGrade != "همه صنف‌ها") {
+            allActiveStudents.filter { it.grade == selectedGrade }
+        } else {
+            allActiveStudents
+        }
+
         val attendanceMap = attendanceDao.getAttendanceListForDate(dateStr).associateBy { it.studentId }
+        val existingMessagesByStudent = messageDao.getMessageRecordsForDate(dateStr).groupBy { it.studentId }
         val settings = getSettings()
 
         val timeFormatter = SimpleDateFormat("HH:mm", Locale.getDefault())
@@ -221,17 +312,17 @@ class AppRepository(
 
         students.forEach { student ->
             val isPresent = attendanceMap[student.id]?.isPresent ?: true
+            val studentMsgs = existingMessagesByStudent[student.id] ?: emptyList()
+            val sentTypes = studentMsgs.map { it.eventType }.toSet()
 
-            val isTarget = when (eventType) {
-                EventType.DEPARTURE -> isPresent
-                else -> when (settings.notificationTarget) {
-                    NotificationTarget.ABSENT_ONLY -> !isPresent
-                    NotificationTarget.PRESENT_ONLY -> isPresent
-                    NotificationTarget.BOTH -> true
-                }
-            }
+            val isEligible = isEligibleForMessage(
+                isPresent = isPresent,
+                eventType = eventType,
+                existingTypes = sentTypes,
+                settings = settings
+            )
 
-            if (isTarget) {
+            if (isEligible) {
                 val actualEventType = if (eventType == EventType.DEPARTURE) {
                     EventType.DEPARTURE
                 } else {
@@ -269,26 +360,6 @@ class AppRepository(
                         queuedCount++
                     }
                 }
-
-                // WhatsApp Queue
-                if (settings.enableWhatsapp && student.whatsappPhone.isNotBlank()) {
-                    val existing = messageDao.findExistingRecord(student.id, dateStr, actualEventType, SendChannel.WHATSAPP)
-                    if (existing == null) {
-                        messageDao.insertMessage(
-                            MessageRecord(
-                                studentId = student.id,
-                                studentName = student.name,
-                                phoneNumber = student.whatsappPhone,
-                                messageText = formattedMsg,
-                                eventType = actualEventType,
-                                channel = SendChannel.WHATSAPP,
-                                date = dateStr,
-                                status = MessageStatus.ACTION_REQUIRED // Requires user interaction/action
-                            )
-                        )
-                        queuedCount++
-                    }
-                }
             }
         }
 
@@ -318,6 +389,11 @@ class AppRepository(
         }
     }
 
+    suspend fun retryAllFailedMessages() {
+        messageDao.resetFailedMessagesToPending()
+        triggerWorkManager()
+    }
+
     fun triggerWorkManager() {
         try {
             val workRequest = OneTimeWorkRequestBuilder<SendMessageWorker>()
@@ -330,6 +406,9 @@ class AppRepository(
     }
 
     suspend fun processPendingSmsMessages() {
+        // Step 0: Auto purge messages older than 30 days to keep database lean
+        autoPurgeOldMessages(30)
+
         // Step 1: Recover any stuck SENDING messages from crash/reboot
         messageDao.markStuckSendingMessagesAsUnknown()
 
@@ -414,7 +493,7 @@ class AppRepository(
             obj.put("name", s.name)
             obj.put("fatherName", s.fatherName)
             obj.put("smsPhone", s.smsPhone)
-            obj.put("whatsappPhone", s.whatsappPhone)
+            obj.put("grade", s.grade)
             obj.put("studentCode", s.studentCode)
             obj.put("createdAt", s.createdAt)
             obj.put("isActive", s.isActive)
@@ -440,7 +519,6 @@ class AppRepository(
         val settings = getSettings()
         val settingsObj = JSONObject().apply {
             put("enableSms", settings.enableSms)
-            put("enableWhatsapp", settings.enableWhatsapp)
             put("notificationTarget", settings.notificationTarget.name)
             put("enableDeparture", settings.enableDeparture)
             put("absenceTemplate", settings.absenceTemplate)
@@ -448,8 +526,21 @@ class AppRepository(
             put("departureTemplate", settings.departureTemplate)
             put("selectedSubId", settings.selectedSubId)
             put("pacingDelayMs", settings.pacingDelayMs)
+            put("autoGenerateStudentCode", settings.autoGenerateStudentCode)
         }
         root.put("settings", settingsObj)
+
+        // School Classes
+        val classesList = getAllSchoolClasses()
+        val classesArray = JSONArray()
+        classesList.forEach { c ->
+            val obj = JSONObject()
+            obj.put("id", c.id)
+            obj.put("name", c.name)
+            obj.put("sortOrder", c.sortOrder)
+            classesArray.put(obj)
+        }
+        root.put("school_classes", classesArray)
 
         return@withContext root.toString(2)
     }
@@ -471,7 +562,7 @@ class AppRepository(
                             name = obj.optString("name", ""),
                             fatherName = obj.optString("fatherName", ""),
                             smsPhone = obj.optString("smsPhone", ""),
-                            whatsappPhone = obj.optString("whatsappPhone", ""),
+                            grade = obj.optString("grade", obj.optString("whatsappPhone", "")),
                             studentCode = obj.optString("studentCode", ""),
                             createdAt = obj.optLong("createdAt", System.currentTimeMillis()),
                             isActive = obj.optBoolean("isActive", true)
@@ -481,6 +572,24 @@ class AppRepository(
                 if (studentsList.isNotEmpty()) {
                     studentDao.insertStudents(studentsList)
                     restoredStudentsCount = studentsList.size
+                }
+            }
+
+            if (root.has("school_classes")) {
+                val classesArr = root.getJSONArray("school_classes")
+                val classesList = mutableListOf<SchoolClass>()
+                for (i in 0 until classesArr.length()) {
+                    val obj = classesArr.getJSONObject(i)
+                    classesList.add(
+                        SchoolClass(
+                            id = obj.optLong("id", 0L),
+                            name = obj.optString("name", ""),
+                            sortOrder = obj.optInt("sortOrder", 0)
+                        )
+                    )
+                }
+                if (classesList.isNotEmpty()) {
+                    schoolClassDao?.insertClasses(classesList)
                 }
             }
 
@@ -513,14 +622,14 @@ class AppRepository(
                 val appSettings = AppSettings(
                     id = 1,
                     enableSms = obj.optBoolean("enableSms", true),
-                    enableWhatsapp = obj.optBoolean("enableWhatsapp", false),
                     notificationTarget = targetEnum,
                     enableDeparture = obj.optBoolean("enableDeparture", false),
                     absenceTemplate = obj.optString("absenceTemplate", "والد گرامی، فرزند شما {نام_شاگرد} امروز در مکتب حاضر نشده است. لطفاً پیگیری نمایید."),
                     arrivalTemplate = obj.optString("arrivalTemplate", "والد گرامی، فرزند شما {نام_شاگرد} امروز ساعت {ساعت} وارد مکتب شد."),
                     departureTemplate = obj.optString("departureTemplate", "والد گرامی، فرزند شما {نام_شاگرد} امروز ساعت {ساعت} از مکتب خارج شد."),
                     selectedSubId = obj.optInt("selectedSubId", -1),
-                    pacingDelayMs = obj.optLong("pacingDelayMs", 2500L)
+                    pacingDelayMs = obj.optLong("pacingDelayMs", 2500L),
+                    autoGenerateStudentCode = obj.optBoolean("autoGenerateStudentCode", true)
                 )
                 settingsDao.saveSettings(appSettings)
             }

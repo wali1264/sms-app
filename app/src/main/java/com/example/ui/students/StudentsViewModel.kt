@@ -3,6 +3,7 @@ package com.example.ui.students
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.data.entity.SchoolClass
 import com.example.data.entity.Student
 import com.example.repository.AppRepository
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -22,8 +23,10 @@ data class StudentsUiState(
     val nameInput: String = "",
     val fatherNameInput: String = "",
     val smsPhoneInput: String = "",
-    val whatsappPhoneInput: String = "",
+    val gradeInput: String = "",
     val codeInput: String = "",
+    val isCodeDuplicate: Boolean = false,
+    val schoolClasses: List<SchoolClass> = emptyList(),
     val errorMessage: String? = null,
     val isSyncing: Boolean = false,
     val toastMessage: String? = null
@@ -39,8 +42,9 @@ class StudentsViewModel(private val repository: AppRepository) : ViewModel() {
     private val nameInput = MutableStateFlow("")
     private val fatherNameInput = MutableStateFlow("")
     private val smsPhoneInput = MutableStateFlow("")
-    private val whatsappPhoneInput = MutableStateFlow("")
+    private val gradeInput = MutableStateFlow("")
     private val codeInput = MutableStateFlow("")
+    private val isCodeDuplicate = MutableStateFlow(false)
 
     private val errorMessage = MutableStateFlow<String?>(null)
     private val isSyncing = MutableStateFlow(false)
@@ -85,8 +89,10 @@ class StudentsViewModel(private val repository: AppRepository) : ViewModel() {
         nameInput,
         fatherNameInput,
         smsPhoneInput,
-        whatsappPhoneInput,
+        gradeInput,
         codeInput,
+        isCodeDuplicate,
+        repository.allSchoolClassesFlow,
         errorMessage,
         isSyncing,
         toastMessage
@@ -100,11 +106,14 @@ class StudentsViewModel(private val repository: AppRepository) : ViewModel() {
         val name = flows[5] as String
         val father = flows[6] as String
         val sms = flows[7] as String
-        val whatsapp = flows[8] as String
+        val grade = flows[8] as String
         val code = flows[9] as String
-        val error = flows[10] as String?
-        val syncing = flows[11] as Boolean
-        val toast = flows[12] as String?
+        val codeDup = flows[10] as Boolean
+        @Suppress("UNCHECKED_CAST")
+        val classesList = flows[11] as List<SchoolClass>
+        val error = flows[12] as String?
+        val syncing = flows[13] as Boolean
+        val toast = flows[14] as String?
 
         StudentsUiState(
             students = students,
@@ -115,8 +124,10 @@ class StudentsViewModel(private val repository: AppRepository) : ViewModel() {
             nameInput = name,
             fatherNameInput = father,
             smsPhoneInput = sms,
-            whatsappPhoneInput = whatsapp,
+            gradeInput = grade,
             codeInput = code,
+            isCodeDuplicate = codeDup,
+            schoolClasses = classesList,
             errorMessage = error,
             isSyncing = syncing,
             toastMessage = toast
@@ -136,10 +147,24 @@ class StudentsViewModel(private val repository: AppRepository) : ViewModel() {
         nameInput.value = ""
         fatherNameInput.value = ""
         smsPhoneInput.value = ""
-        whatsappPhoneInput.value = ""
-        codeInput.value = ""
-        errorMessage.value = null
-        isFormDialogOpen.value = true
+        
+        viewModelScope.launch {
+            val classes = repository.getAllSchoolClasses()
+            if (gradeInput.value.isBlank() && classes.isNotEmpty()) {
+                gradeInput.value = classes.first().name
+            }
+            val settings = repository.getSettings()
+            if (settings.autoGenerateStudentCode) {
+                val nextCode = repository.generateNextStudentCode()
+                codeInput.value = nextCode
+                isCodeDuplicate.value = false
+            } else {
+                codeInput.value = ""
+                isCodeDuplicate.value = false
+            }
+            errorMessage.value = null
+            isFormDialogOpen.value = true
+        }
     }
 
     fun openEditStudentDialog(student: Student) {
@@ -147,8 +172,9 @@ class StudentsViewModel(private val repository: AppRepository) : ViewModel() {
         nameInput.value = student.name
         fatherNameInput.value = student.fatherName
         smsPhoneInput.value = student.smsPhone
-        whatsappPhoneInput.value = student.whatsappPhone
+        gradeInput.value = student.grade
         codeInput.value = student.studentCode
+        isCodeDuplicate.value = false
         errorMessage.value = null
         isFormDialogOpen.value = true
     }
@@ -157,19 +183,27 @@ class StudentsViewModel(private val repository: AppRepository) : ViewModel() {
         isFormDialogOpen.value = false
         editingStudent.value = null
         errorMessage.value = null
+        isCodeDuplicate.value = false
     }
 
     fun onNameChanged(value: String) { nameInput.value = value }
     fun onFatherNameChanged(value: String) { fatherNameInput.value = value }
     fun onSmsPhoneChanged(value: String) { smsPhoneInput.value = value }
-    fun onWhatsappPhoneChanged(value: String) { whatsappPhoneInput.value = value }
-    fun onCodeChanged(value: String) { codeInput.value = value }
+    fun onGradeChanged(value: String) { gradeInput.value = value }
+    
+    fun onCodeChanged(value: String) {
+        codeInput.value = value
+        viewModelScope.launch {
+            val currentEditingId = editingStudent.value?.id ?: 0L
+            isCodeDuplicate.value = repository.isStudentCodeDuplicate(value, currentEditingId)
+        }
+    }
 
     fun saveStudent() {
         val name = nameInput.value.trim()
         val father = fatherNameInput.value.trim()
         val sms = smsPhoneInput.value.trim()
-        val whatsapp = whatsappPhoneInput.value.trim()
+        val grade = gradeInput.value.trim()
         val code = codeInput.value.trim()
 
         if (name.isBlank()) {
@@ -188,13 +222,20 @@ class StudentsViewModel(private val repository: AppRepository) : ViewModel() {
         viewModelScope.launch {
             try {
                 val currentEditing = editingStudent.value
+                val currentEditingId = currentEditing?.id ?: 0L
+                if (code.isNotBlank() && repository.isStudentCodeDuplicate(code, currentEditingId)) {
+                    isCodeDuplicate.value = true
+                    errorMessage.value = "کد شاگرد وارد شده تکراری می‌باشد. لطفاً کد دیگری وارد کنید."
+                    return@launch
+                }
+
                 if (currentEditing == null) {
                     repository.insertStudent(
                         Student(
                             name = name,
                             fatherName = father,
                             smsPhone = sms,
-                            whatsappPhone = whatsapp,
+                            grade = grade,
                             studentCode = code
                         )
                     )
@@ -205,7 +246,7 @@ class StudentsViewModel(private val repository: AppRepository) : ViewModel() {
                             name = name,
                             fatherName = father,
                             smsPhone = sms,
-                            whatsappPhone = whatsapp,
+                            grade = grade,
                             studentCode = code
                         )
                     )
@@ -213,6 +254,7 @@ class StudentsViewModel(private val repository: AppRepository) : ViewModel() {
                 }
                 isFormDialogOpen.value = false
                 editingStudent.value = null
+                isCodeDuplicate.value = false
             } catch (e: Exception) {
                 errorMessage.value = e.localizedMessage ?: "خطایی رخ داد."
                 toastMessage.value = e.localizedMessage ?: "خطایی رخ داد."

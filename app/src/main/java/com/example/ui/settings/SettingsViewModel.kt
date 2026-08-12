@@ -7,6 +7,7 @@ import com.example.auth.SupabaseAuthManager
 import com.example.auth.TeacherProfile
 import com.example.data.entity.AppSettings
 import com.example.data.entity.NotificationTarget
+import com.example.data.entity.SchoolClass
 import com.example.repository.AppRepository
 import com.example.sms.SimInfo
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,6 +24,13 @@ class SettingsViewModel(private val repository: AppRepository) : ViewModel() {
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = AppSettings()
+        )
+
+    val schoolClasses: StateFlow<List<SchoolClass>> = repository.allSchoolClassesFlow
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
         )
 
     private val toastMessage = MutableStateFlow<String?>(null)
@@ -83,13 +91,6 @@ class SettingsViewModel(private val repository: AppRepository) : ViewModel() {
         }
     }
 
-    fun updateEnableWhatsapp(enabled: Boolean) {
-        viewModelScope.launch {
-            val current = settings.value
-            repository.saveSettings(current.copy(enableWhatsapp = enabled))
-        }
-    }
-
     fun updateNotificationTarget(target: NotificationTarget) {
         viewModelScope.launch {
             val current = settings.value
@@ -136,6 +137,48 @@ class SettingsViewModel(private val repository: AppRepository) : ViewModel() {
         viewModelScope.launch {
             val current = settings.value
             repository.saveSettings(current.copy(pacingDelayMs = delayMs))
+        }
+    }
+
+    fun updateAutoGenerateStudentCode(enabled: Boolean) {
+        viewModelScope.launch {
+            val current = settings.value
+            repository.saveSettings(current.copy(autoGenerateStudentCode = enabled))
+        }
+    }
+
+    fun addSchoolClass(name: String) {
+        if (name.isBlank()) return
+        viewModelScope.launch {
+            val currentList = repository.getAllSchoolClasses()
+            if (currentList.any { it.name.trim().equals(name.trim(), ignoreCase = true) }) {
+                toastMessage.value = "صنفی با این نام قبلاً ثبت شده است."
+                return@launch
+            }
+            val maxSort = currentList.maxOfOrNull { it.sortOrder } ?: 0
+            val newClass = SchoolClass(name = name.trim(), sortOrder = maxSort + 1)
+            repository.insertSchoolClass(newClass)
+            toastMessage.value = "صنف «${name.trim()}» با موفقیت افزوده شد."
+        }
+    }
+
+    fun updateSchoolClass(schoolClass: SchoolClass) {
+        if (schoolClass.name.isBlank()) return
+        viewModelScope.launch {
+            val currentList = repository.getAllSchoolClasses()
+            if (currentList.any { it.id != schoolClass.id && it.name.trim().equals(schoolClass.name.trim(), ignoreCase = true) }) {
+                toastMessage.value = "صنفی با این نام قبلاً وجود دارد."
+                return@launch
+            }
+            repository.updateSchoolClass(schoolClass)
+            toastMessage.value = "صنف با موفقیت ویرایش شد."
+        }
+    }
+
+    fun deleteSchoolClass(id: Long) {
+        viewModelScope.launch {
+            repository.deleteSchoolClass(id)
+            toastMessage.value = "صنف با موفقیت حذف شد."
         }
     }
 

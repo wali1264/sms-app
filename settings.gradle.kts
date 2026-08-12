@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "TeacherAttendance"
+rootProject.name = "School SMS"
 
 include(":app")

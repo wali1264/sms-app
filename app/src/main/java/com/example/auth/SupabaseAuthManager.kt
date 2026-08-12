@@ -948,9 +948,22 @@ class SupabaseAuthManager(private val context: Context) {
 
         if (userId != null) {
             try {
+                // 1. Request clearance of device_id on Supabase
                 updateDeviceId(userId, accessToken, null)
+
+                // 2. Query Supabase to verify that device_id is actually cleared (NULL/empty)
+                val verifyProfile = fetchProfile(userId, accessToken)
+                val updatedDeviceId = verifyProfile?.optString("device_id", null)
+
+                if (!updatedDeviceId.isNullOrEmpty() && updatedDeviceId != "null") {
+                    return@withContext Result.failure(
+                        Exception("پاکسازی شناسه آنلاین با خطا مواجه شد. جهت جلوگیری از قفل شدن حساب، خروج انجام نشد. لطفاً مجدداً تلاش کنید.")
+                    )
+                }
             } catch (e: Exception) {
-                e.printStackTrace()
+                return@withContext Result.failure(
+                    Exception("خطا در تأیید پاکسازی شناسه دستگاه: ${e.localizedMessage}. خروج لغو شد.")
+                )
             }
         }
 
@@ -1230,8 +1243,62 @@ class SupabaseAuthManager(private val context: Context) {
                         }
                     }
                 }
+
+                // 3. Also sync school_classes table
+                if (root.has("school_classes")) {
+                    val classesArr = root.getJSONArray("school_classes")
+                    val classesPayload = JSONArray()
+                    for (i in 0 until classesArr.length()) {
+                        val c = classesArr.getJSONObject(i)
+                        val classObj = JSONObject().apply {
+                            put("local_id", c.optLong("id", 0L))
+                            if (codeInt != null) {
+                                put("school_code", codeInt)
+                            } else {
+                                put("school_code", effectiveCode)
+                            }
+                            put("name", c.optString("name", ""))
+                            put("sort_order", c.optInt("sortOrder", 0))
+                        }
+                        classesPayload.put(classObj)
+                    }
+
+                    // First, delete existing classes for this school_code to guarantee clean mirror state
+                    try {
+                        val deleteQuery = if (codeInt != null) "$codeInt" else effectiveCode
+                        val delReq = Request.Builder()
+                            .url("$SUPABASE_URL/rest/v1/school_classes?school_code=eq.$deleteQuery")
+                            .addHeader("apikey", SUPABASE_ANON_KEY)
+                            .addHeader("Authorization", "Bearer $authToken")
+                            .delete()
+                            .build()
+                        client.newCall(delReq).execute()
+                        AppLogger.i("SyncCloud", "صنف‌های قبلی مکتب $deleteQuery پاک‌سازی شدند.")
+                    } catch (e: Exception) {
+                        AppLogger.e("SyncCloud", "خطا در پاک‌سازی صنف‌های قبلی از Supabase", e)
+                    }
+
+                    if (classesPayload.length() > 0) {
+                        AppLogger.i("SyncCloud", "ارسال ${classesPayload.length()} صنف به جدول school_classes...")
+                        val classesReq = Request.Builder()
+                            .url("$SUPABASE_URL/rest/v1/school_classes")
+                            .addHeader("apikey", SUPABASE_ANON_KEY)
+                            .addHeader("Authorization", "Bearer $authToken")
+                            .addHeader("Content-Type", "application/json")
+                            .post(classesPayload.toString().toRequestBody(jsonMediaType))
+                            .build()
+
+                        val classResp = client.newCall(classesReq).execute()
+                        val classErr = classResp.body?.string() ?: ""
+                        if (!classResp.isSuccessful) {
+                            AppLogger.e("SyncCloud", "خطا در ثبت صنف‌ها در Supabase: کد ${classResp.code} | $classErr")
+                        } else {
+                            AppLogger.i("SyncCloud", "جدول school_classes با موفقیت همگام شد.")
+                        }
+                    }
+                }
             } catch (e: Exception) {
-                AppLogger.e("SyncCloud", "خطا در پارس لیست دانش‌آموزان", e)
+                AppLogger.e("SyncCloud", "خطا در پارس لیست دانش‌آموزان/صنف‌ها", e)
             }
 
             return@withContext Result.success(Unit)

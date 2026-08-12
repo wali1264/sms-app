@@ -19,6 +19,12 @@ import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+enum class AttendanceStatusFilter {
+    ALL,
+    PRESENT,
+    ABSENT
+}
+
 data class StudentAttendanceItem(
     val student: Student,
     val isPresent: Boolean
@@ -30,6 +36,9 @@ data class AttendanceUiState(
     val summary: AttendanceSummary = AttendanceSummary(),
     val settings: AppSettings = AppSettings(),
     val searchQuery: String = "",
+    val selectedGrade: String = "همه صنف‌ها",
+    val availableGrades: List<String> = listOf("همه صنف‌ها"),
+    val statusFilter: AttendanceStatusFilter = AttendanceStatusFilter.ALL,
     val isConfirmDialogOpen: Boolean = false,
     val confirmEventType: EventType = EventType.ARRIVAL,
     val pendingSendStats: PendingSendStats? = null,
@@ -43,6 +52,8 @@ class AttendanceViewModel(private val repository: AppRepository) : ViewModel() {
     private val dateFormatted = DateUtils.getTodayFormattedFa()
 
     private val searchQuery = MutableStateFlow("")
+    private val selectedGrade = MutableStateFlow("همه صنف‌ها")
+    private val statusFilter = MutableStateFlow(AttendanceStatusFilter.ALL)
     private val isConfirmDialogOpen = MutableStateFlow(false)
     private val confirmEventType = MutableStateFlow(EventType.ARRIVAL)
     private val pendingStats = MutableStateFlow<PendingSendStats?>(null)
@@ -92,6 +103,8 @@ class AttendanceViewModel(private val repository: AppRepository) : ViewModel() {
         repository.getAttendanceForDate(dateIso),
         repository.appSettingsFlow,
         searchQuery,
+        selectedGrade,
+        statusFilter,
         isConfirmDialogOpen,
         confirmEventType,
         pendingStats,
@@ -104,25 +117,40 @@ class AttendanceViewModel(private val repository: AppRepository) : ViewModel() {
         val records = flows[1] as List<AttendanceRecord>
         val settings = flows[2] as AppSettings
         val query = flows[3] as String
-        val dialogOpen = flows[4] as Boolean
-        val eventType = flows[5] as EventType
-        val stats = flows[6] as PendingSendStats?
-        val syncing = flows[7] as Boolean
-        val toast = flows[8] as String?
+        val gradeSel = flows[4] as String
+        val statusFilt = flows[5] as AttendanceStatusFilter
+        val dialogOpen = flows[6] as Boolean
+        val eventType = flows[7] as EventType
+        val stats = flows[8] as PendingSendStats?
+        val syncing = flows[9] as Boolean
+        val toast = flows[10] as String?
 
         val recordMap = records.associateBy { it.studentId }
 
-        val items = students.map { student ->
+        val gradesList = listOf("همه صنف‌ها") + students.map { it.grade }.filter { it.isNotBlank() }.distinct().sorted()
+
+        val allItems = students.map { student ->
             val record = recordMap[student.id]
             StudentAttendanceItem(
                 student = student,
                 isPresent = record?.isPresent ?: true
             )
-        }.filter {
-            if (query.isBlank()) true
-            else it.student.name.contains(query.trim(), ignoreCase = true) ||
-                    it.student.fatherName.contains(query.trim(), ignoreCase = true) ||
-                    it.student.studentCode.contains(query.trim(), ignoreCase = true)
+        }
+
+        val filteredItems = allItems.filter { item ->
+            val matchGrade = if (gradeSel == "همه صنف‌ها") true else item.student.grade == gradeSel
+            val matchStatus = when (statusFilt) {
+                AttendanceStatusFilter.ALL -> true
+                AttendanceStatusFilter.PRESENT -> item.isPresent
+                AttendanceStatusFilter.ABSENT -> !item.isPresent
+            }
+            val matchQuery = if (query.isBlank()) true else (
+                item.student.name.contains(query.trim(), ignoreCase = true) ||
+                item.student.fatherName.contains(query.trim(), ignoreCase = true) ||
+                item.student.studentCode.contains(query.trim(), ignoreCase = true)
+            )
+
+            matchGrade && matchStatus && matchQuery
         }
 
         val total = students.size
@@ -131,10 +159,13 @@ class AttendanceViewModel(private val repository: AppRepository) : ViewModel() {
 
         AttendanceUiState(
             dateFormatted = dateFormatted,
-            items = items,
+            items = filteredItems,
             summary = AttendanceSummary(totalStudents = total, presentCount = presentCount, absentCount = absentCount),
             settings = settings,
             searchQuery = query,
+            selectedGrade = gradeSel,
+            availableGrades = gradesList,
+            statusFilter = statusFilt,
             isConfirmDialogOpen = dialogOpen,
             confirmEventType = eventType,
             pendingSendStats = stats,
@@ -151,6 +182,18 @@ class AttendanceViewModel(private val repository: AppRepository) : ViewModel() {
         searchQuery.value = query
     }
 
+    fun selectGrade(grade: String) {
+        selectedGrade.value = grade
+    }
+
+    fun toggleStatusFilter(filter: AttendanceStatusFilter) {
+        if (statusFilter.value == filter) {
+            statusFilter.value = AttendanceStatusFilter.ALL
+        } else {
+            statusFilter.value = filter
+        }
+    }
+
     fun toggleAttendance(studentId: Long, currentIsPresent: Boolean) {
         viewModelScope.launch {
             try {
@@ -163,7 +206,8 @@ class AttendanceViewModel(private val repository: AppRepository) : ViewModel() {
 
     fun openSendConfirmation(eventType: EventType) {
         viewModelScope.launch {
-            val stats = repository.getPendingSendStats(dateIso, eventType)
+            val gradeFilter = selectedGrade.value
+            val stats = repository.getPendingSendStats(dateIso, eventType, gradeFilter)
             pendingStats.value = stats
             confirmEventType.value = eventType
             isConfirmDialogOpen.value = true
@@ -178,7 +222,8 @@ class AttendanceViewModel(private val repository: AppRepository) : ViewModel() {
     fun confirmAndSend() {
         val eventType = confirmEventType.value
         viewModelScope.launch {
-            val queuedCount = repository.queueAttendanceMessages(dateIso, eventType)
+            val gradeFilter = selectedGrade.value
+            val queuedCount = repository.queueAttendanceMessages(dateIso, eventType, gradeFilter)
             isConfirmDialogOpen.value = false
             pendingStats.value = null
             toastMessage.value = if (queuedCount > 0) {

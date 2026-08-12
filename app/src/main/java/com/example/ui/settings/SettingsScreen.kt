@@ -51,6 +51,7 @@ fun SettingsScreen(
 
     val isManager = (authState as? AuthState.LoggedIn)?.role == "MANAGER"
     var showConsoleDialog by remember { mutableStateOf(false) }
+    var showSchoolClassesDialog by remember { mutableStateOf(false) }
 
     // Load teachers list when screen opens for Manager
     LaunchedEffect(authState) {
@@ -89,15 +90,31 @@ fun SettingsScreen(
                 color = TextPrimary
             )
 
-            IconButton(
-                onClick = { showConsoleDialog = true },
-                modifier = Modifier.testTag("btn_open_debug_console")
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    imageVector = Icons.Default.Terminal,
-                    contentDescription = "کنسول عیب‌یابی",
-                    tint = TextSecondary.copy(alpha = 0.6f)
-                )
+                IconButton(
+                    onClick = { showSchoolClassesDialog = true },
+                    modifier = Modifier.testTag("btn_manage_classes")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = "مدیریت صنف‌ها",
+                        tint = PrimaryBlue
+                    )
+                }
+
+                IconButton(
+                    onClick = { showConsoleDialog = true },
+                    modifier = Modifier.testTag("btn_open_debug_console")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Terminal,
+                        contentDescription = "کنسول عیب‌یابی",
+                        tint = TextSecondary.copy(alpha = 0.6f)
+                    )
+                }
             }
         }
 
@@ -162,25 +179,39 @@ fun SettingsScreen(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
+                    var isLoggingOut by remember { mutableStateOf(false) }
+
                     Button(
                         onClick = {
                             scope.launch {
+                                isLoggingOut = true
                                 val res = authManager.logout()
+                                isLoggingOut = false
                                 res.onFailure {
-                                    Toast.makeText(context, it.localizedMessage, Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, it.localizedMessage, Toast.LENGTH_LONG).show()
                                 }
                             }
                         },
-                        enabled = isOnline,
+                        enabled = isOnline && !isLoggingOut,
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
                         modifier = Modifier.fillMaxWidth().testTag("btn_logout")
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.ExitToApp,
-                            contentDescription = null,
-                            modifier = Modifier.padding(end = 8.dp)
-                        )
-                        Text("خروج از حساب کاربری")
+                        if (isLoggingOut) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                color = Color.White,
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("در حال پاکسازی شناسه دستگاه...")
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.ExitToApp,
+                                contentDescription = null,
+                                modifier = Modifier.padding(end = 8.dp)
+                            )
+                            Text("خروج از حساب کاربری")
+                        }
                     }
 
                     if (!isOnline) {
@@ -408,6 +439,59 @@ fun SettingsScreen(
             }
         }
 
+        // Student Code & Class Management Settings Card
+        Card(
+            modifier = Modifier.fillMaxWidth().testTag("settings_student_code_card"),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = CardBackground)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = "تنظیمات ثبت شاگردان و صنف‌ها",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = TextPrimary
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { viewModel.updateAutoGenerateStudentCode(!settings.autoGenerateStudentCode) },
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("کدگذاری خودکار شاگردان", style = MaterialTheme.typography.bodyLarge, color = TextPrimary, fontWeight = FontWeight.SemiBold)
+                        Text("هنگام افزودن شاگرد جدید، کد عددی سیستم به طور خودکار اختصاص می‌یابد.", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                    }
+                    Switch(
+                        checked = settings.autoGenerateStudentCode,
+                        onCheckedChange = { viewModel.updateAutoGenerateStudentCode(it) },
+                        colors = SwitchDefaults.colors(checkedThumbColor = PrimaryBlue),
+                        modifier = Modifier.testTag("auto_generate_student_code_switch")
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                Spacer(modifier = Modifier.height(12.dp))
+
+                OutlinedButton(
+                    onClick = { showSchoolClassesDialog = true },
+                    modifier = Modifier.fillMaxWidth().testTag("btn_open_class_management"),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Class,
+                        contentDescription = null,
+                        modifier = Modifier.padding(end = 8.dp),
+                        tint = PrimaryBlue
+                    )
+                    Text("مدیریت لیست صنف‌ها", color = PrimaryBlue, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
         // SMS & Notification Settings (Only visible to Manager or standalone mode)
         if (isManager) {
             Card(
@@ -437,22 +521,6 @@ fun SettingsScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("پیامک (SMS)", style = MaterialTheme.typography.bodyLarge, color = TextPrimary)
-                    }
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { viewModel.updateEnableWhatsapp(!settings.enableWhatsapp) },
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Checkbox(
-                            checked = settings.enableWhatsapp,
-                            onCheckedChange = { viewModel.updateEnableWhatsapp(it) },
-                            colors = CheckboxDefaults.colors(checkedColor = PrimaryBlue),
-                            modifier = Modifier.testTag("enable_whatsapp_checkbox")
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("واتساپ (WhatsApp)", style = MaterialTheme.typography.bodyLarge, color = TextPrimary)
                     }
                 }
             }
@@ -824,5 +892,185 @@ fun SettingsScreen(
                 authManager = authManager
             )
         }
+
+        // School Classes Management Dialog
+        if (showSchoolClassesDialog) {
+            SchoolClassesDialog(
+                onDismiss = { showSchoolClassesDialog = false },
+                viewModel = viewModel
+            )
+        }
+    }
+}
+
+@Composable
+fun SchoolClassesDialog(
+    onDismiss: () -> Unit,
+    viewModel: SettingsViewModel
+) {
+    val classes by viewModel.schoolClasses.collectAsStateWithLifecycle()
+    var newClassName by remember { mutableStateOf("") }
+    var editingClass by remember { mutableStateOf<com.example.data.entity.SchoolClass?>(null) }
+    var editClassName by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Class, contentDescription = null, tint = PrimaryBlue, modifier = Modifier.padding(end = 8.dp))
+                Text("مدیریت صنف‌ها", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 420.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "در این بخش می‌توانید صنف‌های جدید اضافه کرده یا صنف‌های موجود را ویرایش و حذف کنید.",
+                    fontSize = 12.sp,
+                    color = TextSecondary
+                )
+
+                // Add new class section
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = newClassName,
+                        onValueChange = { newClassName = it },
+                        label = { Text("عنوان صنف جدید (مثلاً صنف ۱۳)") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(
+                        onClick = {
+                            if (newClassName.isNotBlank()) {
+                                viewModel.addSchoolClass(newClassName)
+                                newClassName = ""
+                            }
+                        },
+                        enabled = newClassName.isNotBlank(),
+                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                    ) {
+                        Text("افزودن")
+                    }
+                }
+
+                HorizontalDivider()
+
+                // List of existing classes
+                if (classes.isEmpty()) {
+                    Text(
+                        text = "هیچ صنفی تعریف نشده است.",
+                        fontSize = 13.sp,
+                        color = TextSecondary,
+                        modifier = Modifier.padding(vertical = 16.dp)
+                    )
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f, fill = false)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        classes.forEach { item ->
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(8.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = item.name,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = TextPrimary
+                                    )
+
+                                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        IconButton(
+                                            onClick = {
+                                                editingClass = item
+                                                editClassName = item.name
+                                            },
+                                            modifier = Modifier.size(32.dp)
+                                        ) {
+                                            Icon(Icons.Default.Edit, contentDescription = "ویرایش", tint = PrimaryBlue, modifier = Modifier.size(18.dp))
+                                        }
+
+                                        IconButton(
+                                            onClick = { viewModel.deleteSchoolClass(item.id) },
+                                            modifier = Modifier.size(32.dp)
+                                        ) {
+                                            Icon(Icons.Default.Delete, contentDescription = "حذف", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onDismiss,
+                colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue)
+            ) {
+                Text("بستن")
+            }
+        }
+    )
+
+    // Edit Class Dialog
+    if (editingClass != null) {
+        AlertDialog(
+            onDismissRequest = { editingClass = null },
+            title = { Text("ویرایش صنف") },
+            text = {
+                OutlinedTextField(
+                    value = editClassName,
+                    onValueChange = { editClassName = it },
+                    label = { Text("عنوان صنف") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        editingClass?.let { target ->
+                            if (editClassName.isNotBlank()) {
+                                viewModel.updateSchoolClass(target.copy(name = editClassName.trim()))
+                                editingClass = null
+                            }
+                        }
+                    },
+                    enabled = editClassName.isNotBlank(),
+                    colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue)
+                ) {
+                    Text("ذخیره تغییرات")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { editingClass = null }) {
+                    Text("انصراف")
+                }
+            }
+        )
     }
 }

@@ -10,7 +10,7 @@ data class Student(
     val name: String,
     val fatherName: String,
     val smsPhone: String,
-    val whatsappPhone: String = "",
+    val grade: String = "",
     val studentCode: String = "",
     val createdAt: Long = System.currentTimeMillis(),
     val isActive: Boolean = true
