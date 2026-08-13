@@ -147,6 +147,13 @@ class SettingsViewModel(private val repository: AppRepository) : ViewModel() {
         }
     }
 
+    fun updateEnableCloudSync(enabled: Boolean) {
+        viewModelScope.launch {
+            val current = settings.value
+            repository.saveSettings(current.copy(enableCloudSync = enabled))
+        }
+    }
+
     fun addSchoolClass(name: String) {
         if (name.isBlank()) return
         viewModelScope.launch {

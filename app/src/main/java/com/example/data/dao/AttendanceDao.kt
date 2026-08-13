@@ -27,6 +27,9 @@ interface AttendanceDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertOrUpdateAll(attendanceRecords: List<AttendanceRecord>)
 
+    @Query("DELETE FROM attendance_records WHERE updatedAt < :cutoffMillis OR (date LIKE '____-__-__' AND date < :cutoffDateIso)")
+    suspend fun deleteAttendanceOlderThan(cutoffMillis: Long, cutoffDateIso: String): Int
+
     @Query("DELETE FROM attendance_records")
     suspend fun deleteAllAttendanceRecords()
 }

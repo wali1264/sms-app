@@ -70,6 +70,8 @@ class AppRepository(
     }
 
     private suspend fun triggerCloudSync() {
+        val settings = getSettings()
+        if (!settings.enableCloudSync) return
         authManager?.let { auth ->
             val schoolCode = auth.getSavedSchoolCode()
             if (auth.isNetworkAvailable() && schoolCode.isNotBlank()) {
@@ -85,6 +87,11 @@ class AppRepository(
 
     suspend fun syncWithCloudIfAvailable(): Result<String> = withContext(Dispatchers.IO) {
         cleanupAndSyncSchoolClasses(emptyList())
+        autoPurgeOldAttendanceRecords(10)
+        val settings = getSettings()
+        if (!settings.enableCloudSync) {
+            return@withContext Result.success("همگام‌سازی ابری غیرفعال است.")
+        }
         val auth = authManager ?: return@withContext Result.success("آفلاین")
         if (!auth.isNetworkAvailable()) {
             return@withContext Result.success("آفلاین - استفاده از اطلاعات محلی")
@@ -234,6 +241,12 @@ class AppRepository(
     suspend fun saveSettings(settings: AppSettings) = settingsDao.saveSettings(settings)
 
     // --- Attendance ---
+    suspend fun autoPurgeOldAttendanceRecords(daysThreshold: Int = 10): Int = withContext(Dispatchers.IO) {
+        val thresholdMillis = System.currentTimeMillis() - (daysThreshold.toLong() * 24L * 60L * 60L * 1000L)
+        val cutoffDateIso = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date(thresholdMillis))
+        return@withContext attendanceDao.deleteAttendanceOlderThan(thresholdMillis, cutoffDateIso)
+    }
+
     fun getAttendanceForDate(dateStr: String): Flow<List<AttendanceRecord>> {
         return attendanceDao.getAttendanceForDate(dateStr)
     }
@@ -248,6 +261,7 @@ class AppRepository(
     }
 
     suspend fun markAllDefaultPresent(dateStr: String, students: List<Student>) {
+        autoPurgeOldAttendanceRecords(10)
         val existing = attendanceDao.getAttendanceListForDate(dateStr).associateBy { it.studentId }
         val newRecords = students.map { student ->
             existing[student.id] ?: AttendanceRecord(studentId = student.id, date = dateStr, isPresent = true)
@@ -560,6 +574,7 @@ class AppRepository(
         root.put("students", studentsArray)
 
         // Attendance
+        autoPurgeOldAttendanceRecords(10)
         val attendanceList = attendanceDao.getAllAttendanceRecords()
         val attendanceArray = JSONArray()
         attendanceList.forEach { a ->
@@ -585,6 +600,7 @@ class AppRepository(
             put("selectedSubId", settings.selectedSubId)
             put("pacingDelayMs", settings.pacingDelayMs)
             put("autoGenerateStudentCode", settings.autoGenerateStudentCode)
+            put("enableCloudSync", settings.enableCloudSync)
         }
         root.put("settings", settingsObj)
 
@@ -621,16 +637,28 @@ class AppRepository(
                 val studentsList = mutableListOf<Student>()
                 for (i in 0 until studentsArr.length()) {
                     val obj = studentsArr.getJSONObject(i)
+                    val sId = obj.optLong("id", 0L)
+                    val cloudIsActive = obj.optBoolean("isActive", true)
+
+                    val localStudent = if (sId > 0 && !clearLocalFirst) studentDao.getStudentById(sId) else null
+
+                    // Preserve local deletion if local student exists and was soft-deleted (!isActive)
+                    val finalIsActive = if (localStudent != null && !localStudent.isActive) {
+                        false
+                    } else {
+                        cloudIsActive
+                    }
+
                     studentsList.add(
                         Student(
-                            id = obj.optLong("id", 0L),
-                            name = obj.optString("name", ""),
-                            fatherName = obj.optString("fatherName", ""),
-                            smsPhone = obj.optString("smsPhone", ""),
-                            grade = obj.optString("grade", obj.optString("whatsappPhone", "")),
-                            studentCode = obj.optString("studentCode", ""),
+                            id = sId,
+                            name = localStudent?.name ?: obj.optString("name", ""),
+                            fatherName = localStudent?.fatherName ?: obj.optString("fatherName", ""),
+                            smsPhone = localStudent?.smsPhone ?: obj.optString("smsPhone", ""),
+                            grade = localStudent?.grade ?: obj.optString("grade", obj.optString("whatsappPhone", "")),
+                            studentCode = localStudent?.studentCode ?: obj.optString("studentCode", ""),
                             createdAt = obj.optLong("createdAt", System.currentTimeMillis()),
-                            isActive = obj.optBoolean("isActive", true)
+                            isActive = finalIsActive
                         )
                     )
                 }
@@ -675,30 +703,33 @@ class AppRepository(
                 }
                 if (attList.isNotEmpty()) {
                     attendanceDao.insertOrUpdateAll(attList)
-                    restoredAttendanceCount = attList.size
                 }
+                autoPurgeOldAttendanceRecords(10)
+                restoredAttendanceCount = attendanceDao.getAllAttendanceRecords().size
             }
 
             if (root.has("settings")) {
                 val existingLocal = settingsDao.getSettings()
-                val obj = root.getJSONObject("settings")
-                val targetName = obj.optString("notificationTarget", NotificationTarget.ABSENT_ONLY.name)
-                val targetEnum = try { NotificationTarget.valueOf(targetName) } catch (e: Exception) { NotificationTarget.ABSENT_ONLY }
+                if (existingLocal == null || clearLocalFirst) {
+                    val obj = root.getJSONObject("settings")
+                    val targetName = obj.optString("notificationTarget", NotificationTarget.ABSENT_ONLY.name)
+                    val targetEnum = try { NotificationTarget.valueOf(targetName) } catch (e: Exception) { NotificationTarget.ABSENT_ONLY }
 
-                // Preserve local hardware settings if existing on device
-                val appSettings = AppSettings(
-                    id = 1,
-                    enableSms = obj.optBoolean("enableSms", true),
-                    notificationTarget = existingLocal?.notificationTarget ?: targetEnum,
-                    enableDeparture = obj.optBoolean("enableDeparture", false),
-                    absenceTemplate = obj.optString("absenceTemplate", "والد گرامی، فرزند شما {نام_شاگرد} امروز در مکتب حاضر نشده است. لطفاً پیگیری نمایید."),
-                    arrivalTemplate = obj.optString("arrivalTemplate", "والد گرامی، فرزند شما {نام_شاگرد} امروز ساعت {ساعت} وارد مکتب شد."),
-                    departureTemplate = obj.optString("departureTemplate", "والد گرامی، فرزند شما {نام_شاگرد} امروز ساعت {ساعت} از مکتب خارج شد."),
-                    selectedSubId = existingLocal?.selectedSubId ?: obj.optInt("selectedSubId", -1),
-                    pacingDelayMs = existingLocal?.pacingDelayMs ?: obj.optLong("pacingDelayMs", 2500L),
-                    autoGenerateStudentCode = obj.optBoolean("autoGenerateStudentCode", true)
-                )
-                settingsDao.saveSettings(appSettings)
+                    val appSettings = AppSettings(
+                        id = 1,
+                        enableSms = obj.optBoolean("enableSms", true),
+                        notificationTarget = targetEnum,
+                        enableDeparture = obj.optBoolean("enableDeparture", false),
+                        absenceTemplate = obj.optString("absenceTemplate", "والد گرامی، فرزند شما {نام_شاگرد} امروز در مکتب حاضر نشده است. لطفاً پیگیری نمایید."),
+                        arrivalTemplate = obj.optString("arrivalTemplate", "والد گرامی، فرزند شما {نام_شاگرد} امروز ساعت {ساعت} وارد مکتب شد."),
+                        departureTemplate = obj.optString("departureTemplate", "والد گرامی، فرزند شما {نام_شاگرد} امروز ساعت {ساعت} از مکتب خارج شد."),
+                        selectedSubId = obj.optInt("selectedSubId", -1),
+                        pacingDelayMs = obj.optLong("pacingDelayMs", 2500L),
+                        autoGenerateStudentCode = obj.optBoolean("autoGenerateStudentCode", true),
+                        enableCloudSync = obj.optBoolean("enableCloudSync", false)
+                    )
+                    settingsDao.saveSettings(appSettings)
+                }
             }
 
             Result.success("بازیابی با موفقیت انجام شد: $restoredStudentsCount شاگرد و $restoredAttendanceCount رکورد حضور و غیاب.")
@@ -734,6 +765,10 @@ class AppRepository(
     }
 
     suspend fun syncManagerCloudRestore(schoolCode: String, authManager: com.example.auth.SupabaseAuthManager): Result<String> = withContext(Dispatchers.IO) {
+        val settings = getSettings()
+        if (!settings.enableCloudSync) {
+            return@withContext Result.success("همگام‌سازی ابری در تنظیمات غیرفعال است.")
+        }
         if (!authManager.isNetworkAvailable()) {
             return@withContext Result.success("آفلاین - اطلاعات محلی استفاده می‌شود.")
         }

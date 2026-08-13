@@ -788,7 +788,36 @@ fun SettingsScreen(
                         }
                     }
 
-                    if (authManager != null && authState is AuthState.LoggedIn) {
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "همگام‌سازی ابری با سرور",
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = TextPrimary
+                            )
+                            Text(
+                                text = "در صورت فعال بودن، داده‌ها با سرور ابری همگام می‌شوند. اگر خاموش باشد، تمام همگام‌سازی‌ها غیرفعال بوده و اطلاعات فقط روی این دستگاه ذخیره می‌گردد.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextSecondary
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Switch(
+                            checked = settings.enableCloudSync,
+                            onCheckedChange = { viewModel.updateEnableCloudSync(it) },
+                            colors = SwitchDefaults.colors(checkedThumbColor = PrimaryBlue),
+                            modifier = Modifier.testTag("enable_cloud_sync_switch")
+                        )
+                    }
+
+                    if (settings.enableCloudSync && authManager != null && authState is AuthState.LoggedIn) {
                         val user = authState as AuthState.LoggedIn
                         Spacer(modifier = Modifier.height(8.dp))
                         TextButton(

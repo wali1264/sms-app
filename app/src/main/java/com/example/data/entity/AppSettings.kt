@@ -21,5 +21,6 @@ data class AppSettings(
     val departureTemplate: String = "والد گرامی، فرزند شما {نام_شاگرد} امروز ساعت {ساعت} از مکتب خارج شد.",
     val selectedSubId: Int = -1,
     val pacingDelayMs: Long = 2500L,
-    val autoGenerateStudentCode: Boolean = true
+    val autoGenerateStudentCode: Boolean = true,
+    val enableCloudSync: Boolean = false
 )
